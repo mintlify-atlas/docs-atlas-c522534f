@@ -1,0 +1,84 @@
+---
+title: "Troubleshooting"
+description: "A systematic approach to diagnosing issues with CloudNativePG clusters, including essential utilities, first steps, and emergency procedures."
+keywords: ["troubleshooting", "debugging", "kubectl", "cnpg plugin", "emergency backup", "diagnostics"]
+---
+
+<Tip>
+  Keep the [kubectl Cheat Sheet](https://kubernetes.io/docs/reference/kubectl/cheatsheet/) bookmarked — it's an essential reference for Kubernetes administrators.
+</Tip>
+
+## Before you start
+
+### Gather environment information
+
+Effective troubleshooting starts with a clear picture of the underlying Kubernetes environment. Collect the following before proceeding:
+
+- The Kubernetes distribution and version you are running.
+- The specifications of the nodes where PostgreSQL is running (CPU, memory, disk).
+- Details about your [storage](/concepts/storage), including the storage class and any benchmarks run before going to production.
+- The relevant Kubernetes applications installed in your cluster (for example, Prometheus, Grafana, Istio, cert-manager).
+- The current state of continuous backup — whether it is configured and working correctly.
+
+<Warning>
+  If backups are not in place or not working, take an [emergency backup](#emergency-backup) before performing any potentially disruptive operation.
+</Warning>
+
+### Install useful utilities
+
+In addition to `kubectl`, install the following tools before troubleshooting:
+
+<CardGroup cols={3}>
+  <Card title="cnpg plugin" icon="terminal" href="/reference/kubectl-plugin">
+    The `cnpg` kubectl plugin provides cluster status, reports, and other diagnostic commands purpose-built for CloudNativePG.
+  </Card>
+  <Card title="jq" icon="brackets-curly" href="https://stedolan.github.io/jq/">
+    A lightweight command-line JSON processor — useful for parsing CloudNativePG's JSON log output and API responses.
+  </Card>
+  <Card title="grep" icon="magnifying-glass" href="https://www.gnu.org/software/grep/">
+    Standard pattern-matching utility available on most Linux distributions. Use `findstr` or WSL on Windows.
+  </Card>
+</CardGroup>
+
+## First steps
+
+Start every troubleshooting session with the `cnpg` kubectl plugin:
+
+<Steps>
+  <Step title="Check cluster status">
+    Run the `status` subcommand to get an overview of the cluster, including instance health, replication state, and recent events:
+
+    ```sh
+    kubectl cnpg status cluster-example
+    ```
+  </Step>
+  <Step title="Generate a report">
+    Run the `report` subcommand to collect the full cluster manifest and operator deployment details. Add `--logs` to include pod logs:
+
+    ```sh
+    kubectl cnpg report cluster cluster-example
+    ```
+
+    The report includes the full cluster manifest and can be installed on air-gapped systems via packages. See the [kubectl plugin reference](/reference/kubectl-plugin) for complete instructions.
+  </Step>
+  <Step title="Check backup status">
+    After reviewing the cluster manifest, verify that backups are configured and working. If backups are missing or failing, take an emergency backup before continuing.
+  </Step>
+</Steps>
+
+## Emergency backup
+
+If your cluster is in trouble and backups are not in place, take an emergency logical backup before performing any disruptive operations.
+
+<Warning>
+  Run this procedure only in emergency situations. The dump file is written to the machine running `kubectl` — ensure you have sufficient disk space and that your data protection policies cover the backup file location.
+</Warning>
+
+The following command takes a logical backup of the `app` database from the `cluster-example-1` pod:
+
+```sh
+kubectl exec cluster-example-1 -c postgres \
+  -- pg_dump -Fc -d app > app.dump
+```
+
+Adapt the pod name, container name, and database name to match your cluster configuration.

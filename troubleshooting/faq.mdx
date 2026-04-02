@@ -1,0 +1,65 @@
+---
+title: "FAQ"
+sidebarTitle: "FAQ"
+description: "Answers to common questions about running PostgreSQL in Kubernetes with CloudNativePG."
+keywords: ["faq", "frequently asked questions", "kubernetes", "postgresql", "cloud native", "bare metal", "immutable containers"]
+---
+
+<AccordionGroup>
+  <Accordion title="Can PostgreSQL really run in Kubernetes?">
+    Yes. An [independent survey by the Data on Kubernetes Community](https://dok.community/dokc-2021-report/) (September 2021) found that half of respondents run most production workloads on Kubernetes, 90% believe Kubernetes is ready for stateful workloads, and 70% already run databases — including PostgreSQL — in production.
+
+    Significant challenges remain, such as the steep learning curve and the quality of Kubernetes operators. A well-built operator like CloudNativePG directly addresses the latter, enabling reliable production PostgreSQL on Kubernetes.
+
+    A key enabler was the general availability of local persistent volumes in [Kubernetes 1.14 (April 2019)](https://kubernetes.io/blog/2019/04/04/kubernetes-1.14-local-persistent-volumes-ga/), which made it practical to run storage-intensive workloads with predictable I/O performance.
+  </Accordion>
+
+  <Accordion title="What are immutable application containers?">
+    An immutable application container is built to run a single process as PID 1 — in this case, the `postgres` process tied to a specific PostgreSQL version. No other processes such as SSH, systemd, or syslog are allowed inside the container.
+
+    "Immutable" means the container is never modified during its lifetime. There are no in-place updates, patches, or configuration changes. When you need to update the application or apply a security fix, you build a new image and redeploy it. This makes deployments safer and more repeatable.
+
+    This is in contrast to mutable system containers, which allow arbitrary changes after startup.
+
+    For background on this design choice, see [Why EDB chose immutable application containers](https://www.enterprisedb.com/blog/why-edb-chose-immutable-application-containers).
+  </Accordion>
+
+  <Accordion title="What does Cloud Native mean?">
+    The [CNCF definition of Cloud Native](https://github.com/cncf/toc/blob/main/DEFINITION.md) is the official reference, but the CloudNativePG team interprets it as three core concepts:
+
+    1. A genuine DevOps culture — built on people, principles, and processes — that enables teams to continuously innovate and deliver value safely and efficiently.
+    2. A microservice architecture based on immutable application containers.
+    3. Container orchestration via Kubernetes.
+
+    Another definition that resonates with the team comes from [Kubernetes Patterns (O'Reilly)](https://www.oreilly.com/library/view/kubernetes-patterns/9781492050278/):
+
+    > Principles, Patterns, Tools to automate containerized microservices at scale.
+  </Accordion>
+
+  <Accordion title="Can I run CloudNativePG on bare metal Kubernetes?">
+    Yes. You can run Kubernetes on bare metal and dedicate physical worker nodes with locally attached storage to PostgreSQL workloads for maximum and predictable I/O performance.
+
+    The project that became CloudNativePG originated from a 2019 pilot that benchmarked PostgreSQL on the same bare metal server — first directly on Linux, then inside Kubernetes with local persistent volumes. The results showed only negligible performance overhead from the container layer, validating the Cloud Native approach for demanding database workloads.
+  </Accordion>
+
+  <Accordion title="Why use PostgreSQL replication instead of file system replication?">
+    PostgreSQL's built-in streaming replication operates at the logical level and is aware of database semantics. File system replication (such as DRBD) operates at the block level and has no knowledge of database state, making it prone to consistency issues during failover.
+
+    See the [Architecture: Synchronizing the state](/concepts/architecture) section for a detailed comparison.
+  </Accordion>
+
+  <Accordion title="Why use an operator instead of running PostgreSQL as a plain container?">
+    Running PostgreSQL as a plain pod — with no replica and a network-attached volume — gives you basic Kubernetes self-healing: the pod restarts or reschedules on failure. But it provides no high availability, no automated failover, and no awareness of PostgreSQL-specific failure scenarios.
+
+    An operator extends the Kubernetes controller model to encode the operational knowledge of a human database administrator. CloudNativePG handles:
+
+    - Cluster bootstrapping and configuration
+    - Automated failover and promotion of the most up-to-date replica
+    - Declarative management of roles, databases, and extensions
+    - Backup, recovery, and point-in-time restore
+    - Rolling updates with zero downtime
+    - Integration with monitoring and log management infrastructure
+
+    The operator uses Kubernetes reconciliation loops to continuously ensure that the actual state of your PostgreSQL cluster matches the desired state you declared — self-healing when they diverge.
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,76 @@
+---
+title: "Backup"
+description: "On-demand physical backup of a CloudNativePG cluster."
+---
+
+The `Backup` CRD triggers an immediate physical backup of a CloudNativePG cluster. Each `Backup` resource represents a single backup operation.
+
+## Example
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Backup
+metadata:
+  name: backup-example
+spec:
+  method: plugin
+  cluster:
+    name: pg-backup
+```
+
+## Spec fields
+
+<ParamField path="spec.cluster.name" type="string" required>
+  Name of the target `Cluster` resource to back up. Must be in the same namespace as the `Backup` resource.
+</ParamField>
+
+<ParamField path="spec.method" type="string" default="barmanObjectStore">
+  Backup method to use. Accepted values:
+
+  - `plugin` — uses a CNPG-I compatible backup plugin.
+  - `volumeSnapshot` — uses Kubernetes VolumeSnapshot for storage-level snapshots.
+  - `barmanObjectStore` — uses Barman to upload backup to object storage. **Deprecated.**
+</ParamField>
+
+<ParamField path="spec.target" type="string" default="prefer-standby">
+  Which instance to take the backup from. Accepted values:
+
+  - `primary` — always back up from the primary instance.
+  - `prefer-standby` — prefer a replica; falls back to primary if no replica is available.
+</ParamField>
+
+<ParamField path="spec.pluginConfiguration" type="object">
+  Plugin-specific configuration. Required when `spec.method` is `plugin`. Contains `name` (plugin name) and `parameters` (plugin-specific key-value pairs).
+</ParamField>
+
+## Status fields
+
+After a backup is triggered, the operator populates the following status fields:
+
+| Field | Description |
+|-------|-------------|
+| `status.phase` | Current phase: `running`, `completed`, or `failed` |
+| `status.startedAt` | Timestamp when the backup started |
+| `status.stoppedAt` | Timestamp when the backup completed or failed |
+| `status.backupId` | Unique identifier assigned to the completed backup |
+| `status.error` | Error message if the backup failed |
+
+## Checking backup status
+
+```bash
+kubectl describe backup backup-example
+```
+
+```bash
+kubectl get backup backup-example -o jsonpath='{.status.phase}'
+```
+
+## Notes
+
+<Note>
+  Each `Backup` resource is immutable after creation. To trigger another backup, create a new `Backup` resource with a different name.
+</Note>
+
+<Tip>
+  Use [ScheduledBackup](/reference/scheduled-backup) to automate recurring backups on a cron schedule instead of creating `Backup` resources manually.
+</Tip>

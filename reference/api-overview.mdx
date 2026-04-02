@@ -1,0 +1,46 @@
+---
+title: "API overview"
+description: "CloudNativePG Custom Resource Definitions (CRDs) reference."
+---
+
+CloudNativePG extends Kubernetes with the following Custom Resource Definitions (CRDs), all in the `postgresql.cnpg.io/v1` API group.
+
+<Columns cols={2}>
+  <Card title="Cluster" icon="server" href="/reference/cluster">
+    The primary CRD representing a PostgreSQL cluster.
+  </Card>
+  <Card title="Backup" icon="database" href="/reference/backup">
+    On-demand physical backup of a cluster.
+  </Card>
+  <Card title="ScheduledBackup" icon="clock" href="/reference/scheduled-backup">
+    Recurring backup schedule using cron expressions.
+  </Card>
+  <Card title="Pooler" icon="arrows-split-up-and-left" href="/reference/pooler">
+    PgBouncer connection pooler for a cluster.
+  </Card>
+</Columns>
+
+## Additional CRDs
+
+| CRD | Purpose |
+|-----|---------|
+| `Database` | Declarative management of PostgreSQL databases, extensions, schemas, and FDWs |
+| `Publication` | Logical replication publication |
+| `Subscription` | Logical replication subscription |
+| `ImageCatalog` | Namespace-scoped catalog of PostgreSQL container images |
+| `ClusterImageCatalog` | Cluster-scoped catalog of PostgreSQL container images |
+| `FailoverQuorum` | Tracks quorum state for quorum-based failover (managed by operator) |
+
+## API group
+
+All CRDs use the API group `postgresql.cnpg.io/v1`.
+
+Example resource header:
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: my-cluster
+  namespace: default
+```

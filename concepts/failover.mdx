@@ -1,0 +1,152 @@
+---
+title: "Failover"
+description: "How CloudNativePG detects primary failure, promotes a replica, and optionally enforces quorum-based promotion to prevent data loss."
+keywords: ["failover", "high availability", "promotion", "quorum", "RPO", "RTO", "synchronous replication"]
+---
+
+When the primary becomes unavailable and the failure persists beyond `.spec.failoverDelay` (default: `0` seconds), CloudNativePG enters **failover mode** and automatically promotes a replica.
+
+## Failover triggers
+
+Failover is initiated when the readiness probe for the primary pod fails. Common causes include:
+
+- Primary pod disk failure
+- Primary pod deletion
+- Sustained failure of the `postgres` container
+
+## Two-phase failover process
+
+Failover happens in two ordered phases to prevent timeline divergence between the new primary and the remaining replicas:
+
+<Steps>
+  <Step title="Mark TargetPrimary as pending">
+    The controller marks `TargetPrimary` as pending and forces the failing primary to shut down. This stops WAL receivers on the replicas. The cluster enters the "Failing over" phase.
+  </Step>
+  <Step title="Leader election and promotion">
+    Once all WAL receivers have stopped, the controller runs a leader election. The chosen instance promotes itself to primary and resumes normal operations. The former primary restarts as a replica.
+  </Step>
+</Steps>
+
+<Info>
+  The two-phase procedure ensures WAL receivers stop cleanly and that the former primary cannot resume streaming WALs on restart. This prevents timeline discrepancies between the new primary and the replicas.
+</Info>
+
+### Shutdown sequence
+
+While the failing primary is shutting down, CloudNativePG attempts an orderly shutdown in two steps:
+
+1. **Fast shutdown** — PostgreSQL disconnects all clients, rolls back active transactions, and attempts to archive pending WALs. The timeout is controlled by `.spec.switchoverDelay`.
+2. **Immediate shutdown** — If fast shutdown fails or times out, PostgreSQL aborts all server processes without a clean shutdown.
+
+## RTO and RPO impact
+
+Failover affects both service availability (RTO) and potential data loss (RPO):
+
+| Phase | Service impact | Data loss risk |
+|-------|---------------|----------------|
+| Primary starts failing, before failover begins | Queries may fail | WAL writes in-flight may be lost |
+| Fast shutdown issued | Cluster stops accepting connections | No data loss |
+| Immediate shutdown (fast shutdown failed) | Cluster stops accepting connections | Pending WAL writes may be lost |
+| Promotion in progress, no primary yet | Cluster without primary | No additional loss |
+
+<Warning>
+  `.spec.switchoverDelay` controls how long CloudNativePG waits for the fast shutdown to complete. A higher value reduces data loss risk (better RPO) but extends the time the cluster operates without a primary (worse RTO). Set this value based on your workload's tolerance for each trade-off.
+</Warning>
+
+## Delayed failover
+
+The `.spec.failoverDelay` option delays the start of the failover procedure after a primary is detected as unhealthy. The default is `0`, which triggers failover immediately.
+
+Delaying failover can be useful when:
+
+- A short network disruption is expected to resolve quickly.
+- Failover itself is more disruptive than waiting — for example, when downstream logical replication subscribers are involved.
+- The time to perform failover exceeds the expected outage duration.
+
+## Failover quorum
+
+Failover quorum is an optional feature that adds a data safety check before any replica is promoted. It is used alongside synchronous replication to prevent promoting a replica that may not have received all committed transactions.
+
+Without failover quorum, a replica that lagged behind the primary during a network partition could be promoted, silently losing transactions that were acknowledged to the application.
+
+Enable failover quorum by setting `.spec.postgresql.synchronous.failoverQuorum` to `true`:
+
+```yaml
+spec:
+  instances: 3
+  postgresql:
+    synchronous:
+      method: any
+      number: 1
+      failoverQuorum: true
+  storage:
+    size: 1Gi
+```
+
+<Warning>
+  Failover quorum requires synchronous replication to be configured. It is not meaningful without a `synchronous` stanza.
+</Warning>
+
+### How the quorum check works
+
+Before promoting a replica, the controller applies the Dynamo `R + W > N` consistency model:
+
+| Variable | Meaning |
+|----------|---------|
+| `R` | Number of **promotable replicas** visible to the operator |
+| `W` | Write quorum — number of standbys that must acknowledge a commit (`.spec.postgresql.synchronous.number`) |
+| `N` | Total number of potentially synchronous replicas |
+
+A **promotable replica** is one that is part of the cluster, can report its state to the operator, and is potentially synchronous.
+
+If `R + W > N`, at least one promotable replica is guaranteed to hold all synchronously committed data. Failover proceeds. If the condition is not met, the controller waits for the topology to change before promoting any replica.
+
+<Info>
+  A `FailoverQuorum` resource is created alongside the `Cluster` when this feature is enabled. The controller updates it during reconciliation and reads it during quorum checks. Do not modify this resource directly.
+</Info>
+
+### Manual promotion
+
+If the quorum check is blocking failover and you need to force promotion — for example, to accept some data loss and restore write availability — use:
+
+```sh
+kubectl cnpg promote <cluster-name> <instance-name>
+```
+
+<Warning>
+  Manual promotion bypasses the quorum check. Use it only as a last resort after fully understanding the risk of data loss.
+</Warning>
+
+## Quorum failover scenarios
+
+The following examples use a three-instance cluster with `synchronous.number: 1` and `dataDurability: required`.
+
+### Three-node cluster — failing pods
+
+| R | W | N | Failover |
+|:-:|:-:|:-:|:--------:|
+| 2 | 1 | 2 | ✅ Primary fails, two replicas remain — quorum is satisfied |
+| 1 | 1 | 2 | ❌ Primary and one replica fail — cannot guarantee data |
+
+- If only the primary fails, two promotable replicas remain (`R=2`). Since `2 + 1 > 2`, failover is allowed.
+- If both the primary and one replica fail, only one promotable replica remains (`R=1`). Since `1 + 1 = 2`, failover is blocked.
+
+### Three-node cluster — network partition
+
+| R | W | N | Failover |
+|:-:|:-:|:-:|:--------:|
+| 2 | 1 | 2 | ✅ Operator can reach both replicas |
+| 1 | 1 | 2 | ❌ Operator can reach only one replica |
+
+When the operator cannot reach the primary but can reach both replicas, failover proceeds. If only one replica is reachable, failover is blocked because the unreachable replica may be the synchronous one.
+
+### Five-node cluster — network partition
+
+A cluster with `instances: 5`, `synchronous.number: 2`, and `dataDurability: required`:
+
+| R | W | N | Failover |
+|:-:|:-:|:-:|:--------:|
+| 3 | 2 | 4 | ✅ Three replicas visible — quorum satisfied |
+| 2 | 2 | 4 | ❌ Only two replicas visible — quorum not met |
+
+Failover requires at least three reachable replicas when the write quorum is two.

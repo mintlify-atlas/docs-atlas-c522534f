@@ -1,0 +1,66 @@
+---
+title: 'Rolling updates'
+description: 'Understand how CloudNativePG performs rolling updates to PostgreSQL clusters, including automated and supervised update strategies.'
+keywords: ['rolling update', 'upgrade', 'primaryUpdateStrategy', 'switchover', 'restart', 'supervised', 'unsupervised']
+---
+
+CloudNativePG supports rolling updates that allow you to change the PostgreSQL version or configuration of a cluster while applications continue to run.
+
+During a rolling update, the operator upgrades replicas one pod at a time, starting from the replica with the highest serial number. The primary is always upgraded last.
+
+Each pod is deleted and recreated with the same PVCs. Service endpoints are updated throughout the process so applications automatically route away from pods being updated.
+
+## Update triggers
+
+A rolling update is initiated when any of the following changes occur:
+
+- The `imageName` attribute in the cluster specification changes.
+- The list of extension images in `.spec.postgresql.extensions` changes.
+- An [image catalog](https://cloudnative-pg.io/documentation/current/image_catalog/) is updated with a new image for the major version in use.
+- A PostgreSQL configuration change requires a restart to take effect.
+- The `Cluster` `.spec.resources` values change.
+- The operator is updated (to ensure pods run the latest instance manager).
+
+## Update strategies
+
+Control rolling update behavior with `primaryUpdateStrategy`:
+
+| Value | Behavior |
+|---|---|
+| `unsupervised` | Fully automated. The operator handles the entire update including the primary. This is the default. |
+| `supervised` | Pauses after all replicas are upgraded, waiting for manual intervention to complete the primary update. |
+
+### Automated updates (`unsupervised`)
+
+When `primaryUpdateStrategy` is `unsupervised`, the operator automatically completes the update once all replicas are upgraded. The behavior for the primary is controlled by `primaryUpdateMethod`:
+
+| Value | Behavior |
+|---|---|
+| `restart` | Performs an in-place restart of the primary pod. If not possible, falls back to a switchover. This is the default. |
+| `switchover` | Promotes the most up-to-date replica to primary, then shuts down the former primary pod. |
+
+<Warning>
+When `primaryUpdateMethod` is `switchover`, you cannot change `imageName` and PostgreSQL configuration parameters simultaneously. The operator rejects such updates with a validation error. Apply image and configuration changes sequentially: update the image first, wait for the rolling update to complete, then update the configuration (or vice versa).
+</Warning>
+
+**Choosing between `restart` and `switchover`:** The `switchover` method ensures the promoted instance already runs the new image before the old primary shuts down, potentially reducing downtime. The `restart` method may need to pull the new image after the primary pod shuts down. The right choice depends on your workload, RTO requirements, and cluster architecture.
+
+### Supervised updates
+
+When `primaryUpdateStrategy` is `supervised`, the rolling update pauses after all replicas have been upgraded. You must manually complete the primary update using one of the following commands.
+
+Trigger a switchover (required for image upgrades):
+
+```bash
+kubectl cnpg promote [cluster] [new_primary]
+```
+
+Trigger an in-place restart (configuration-only changes):
+
+```bash
+kubectl cnpg restart [cluster] [current_primary]
+```
+
+<Note>
+Image upgrades cannot be applied with an in-place restart. Use a switchover when upgrading the PostgreSQL image under supervised mode.
+</Note>

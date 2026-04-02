@@ -1,0 +1,204 @@
+---
+title: "Installation"
+description: "Install the CloudNativePG operator on any Kubernetes cluster."
+---
+
+CloudNativePG is deployed as a Kubernetes operator using standard YAML manifests. Choose the installation method that best fits your environment.
+
+## Installation methods
+
+<Tabs>
+  <Tab title="kubectl manifest">
+    Apply the latest operator manifest directly with `kubectl`:
+
+    ```bash
+    kubectl apply --server-side -f \
+      https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.29/releases/cnpg-1.29.0.yaml
+    ```
+
+    Verify the deployment is ready:
+
+    ```bash
+    kubectl rollout status deployment \
+      -n cnpg-system cnpg-controller-manager
+    ```
+
+    **Customizing the manifest**
+
+    Use the `cnpg` plugin for `kubectl` to override default configuration options. For example, to generate a manifest scoped to a specific namespace:
+
+    ```bash
+    kubectl cnpg install generate \
+      --watch-namespace "specific-namespace" \
+      > cnpg_for_specific_namespace.yaml
+    ```
+
+    See the [`cnpg` plugin documentation](/reference/kubectl-plugin) for more examples.
+
+    <Warning>
+      If you are deploying CloudNativePG on GKE and receive a `failed to call webhook` error, firewall rules on private clusters may be blocking traffic between worker nodes and the control plane. You will need to either change the `targetPort` in the webhook service to one of the allowed ports, or open port `9443` on the firewall. See the [GKE private clusters documentation](https://cloud.google.com/kubernetes-engine/docs/how-to/private-clusters#add_firewall_rules) for details.
+    </Warning>
+  </Tab>
+  <Tab title="Helm">
+    The operator can be installed using the official [CloudNativePG Helm chart](https://github.com/cloudnative-pg/charts).
+
+    Refer to the chart repository for installation instructions, available configuration values, and upgrade guidance.
+
+    <Note>
+      When installed via Helm, the default deployment name is `cnpg-cloudnative-pg`. You can customize this using the `fullnameOverride` field in your `values.yaml` file.
+    </Note>
+  </Tab>
+  <Tab title="OLM">
+    CloudNativePG can be installed via the [Operator Lifecycle Manager (OLM)](https://olm.operatorframework.io/docs/) directly from [OperatorHub.io](https://operatorhub.io/operator/cloudnative-pg).
+
+    For deployments on Red Hat OpenShift, EDB offers and fully supports a certified version of CloudNativePG available through the [Red Hat OpenShift Container Platform catalog](https://catalog.redhat.com/software/container-stacks/detail/653fd4035eece8598f66d97b).
+  </Tab>
+</Tabs>
+
+## Deployment details
+
+The operator is installed in the `cnpg-system` namespace as a Kubernetes `Deployment`. The deployment name depends on the installation method:
+
+- **kubectl manifest or `cnpg` plugin:** `cnpg-controller-manager`
+- **Helm:** `cnpg-cloudnative-pg` (customizable via `fullnameOverride`)
+
+You can inspect the deployment with:
+
+```bash
+kubectl get deployments -n cnpg-system
+kubectl describe deploy -n cnpg-system <deployment-name>
+```
+
+The default configuration uses a single replica, which is suitable for most installations. If the node running the operator becomes unreachable, Kubernetes reschedules the pod on another node. For high availability at the operator level, you can configure multiple replicas — the operator supports leader election.
+
+## Upgrading the operator
+
+<Info>
+  Read the [release notes](https://github.com/cloudnative-pg/cloudnative-pg/releases) carefully before upgrading. Some versions require extra steps.
+</Info>
+
+Upgrading CloudNativePG is a two-step process:
+
+1. Upgrade the controller and related Kubernetes resources.
+2. Upgrade the instance manager running in every PostgreSQL pod.
+
+The first step is done by applying the newer version's manifest (for plain Kubernetes), or using the package manager for your distribution. The second step is triggered automatically after the controller update.
+
+By default, updating the controller initiates a rolling update of every deployed PostgreSQL cluster — one instance at a time — replacing the instance manager via an init container. The rolling update concludes with a switchover governed by the `primaryUpdateStrategy` option on each cluster:
+
+| Value | Behavior |
+|---|---|
+| `unsupervised` (default) | Switchover completes automatically |
+| `supervised` | You must manually promote the new primary using the `cnpg` plugin |
+
+<Warning>
+  With `primaryUpdateStrategy: unsupervised` (the default), upgrading the operator triggers a switchover on your PostgreSQL cluster, causing a brief downtime. Your applications will need to reconnect to PostgreSQL after the switchover.
+</Warning>
+
+### Spread upgrades
+
+By default, all PostgreSQL clusters are rolled out simultaneously, which can cause a spike in resource usage when managing many clusters. You can configure delays at the operator level to spread the load:
+
+- `CLUSTERS_ROLLOUT_DELAY`: Seconds to wait between roll-outs of different PostgreSQL clusters (default: `0`).
+- `INSTANCES_ROLLOUT_DELAY`: Seconds to wait between roll-outs of individual instances within the same cluster (default: `0`).
+
+See the [operator configuration](/reference/operator-config) documentation for how to set these options.
+
+### In-place updates of the instance manager
+
+The default rolling update behavior can be replaced with in-place updates of the instance manager. This approach replaces the instance manager binary without restarting the PostgreSQL process, avoiding a switchover entirely.
+
+To enable in-place updates, set the `ENABLE_INSTANCE_MANAGER_INPLACE_UPDATES` environment variable to `'true'` in the [operator configuration](/reference/operator-config).
+
+<Note>
+  In-place updates do not change the init container image inside the pods, so the pod definition will not reflect the current operator version after an in-place update.
+</Note>
+
+### Version compatibility
+
+CloudNativePG follows semantic versioning. Every release within the same API version (currently `v1`, corresponding to `1.x.y`) is compatible with the previous one.
+
+We strongly recommend upgrading to the latest version of the operator, as each release includes bug fixes and stability improvements. If you cannot upgrade with every release, upgrade through each version in sequential order rather than skipping versions.
+
+## Verifying release assets
+
+CloudNativePG cryptographically signs all official release assets using [cosign](https://github.com/sigstore/cosign). Verifying these signatures confirms the assets originated from the official repository and were published through the automated release workflow.
+
+### Prerequisites
+
+- [cosign](https://github.com/sigstore/cosign) CLI for signature verification
+- [Docker Buildx](https://docs.docker.com/build/install-buildx/) for SBOM and provenance inspection
+
+### Verify the operator YAML manifest
+
+Download the manifest and its corresponding `.sigstore.json` bundle from the [GitHub release page](https://github.com/cloudnative-pg/cloudnative-pg/releases), then run:
+
+```bash
+cosign verify-blob \
+  cnpg-{version}.yaml \
+  --bundle cnpg-{version}.sigstore.json \
+  --certificate-identity-regexp "^https://github.com/cloudnative-pg/cloudnative-pg/.github/workflows/release-publish.yml@refs/tags/v" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+```
+
+### Verify SLSA provenance
+
+Download the artifact and the `multiple.intoto.jsonl` provenance file from the [GitHub release page](https://github.com/cloudnative-pg/cloudnative-pg/releases), then run:
+
+```bash
+slsa-verifier verify-artifact <ARTIFACT> \
+  --provenance-path multiple.intoto.jsonl \
+  --source-uri github.com/cloudnative-pg/cloudnative-pg
+```
+
+### Verify operator container images
+
+```bash
+cosign verify ghcr.io/cloudnative-pg/cloudnative-pg:{tag} \
+  --certificate-identity-regexp="^https://github.com/cloudnative-pg/cloudnative-pg/.github/workflows/release-publish.yml@refs/tags/v" \
+  --certificate-oidc-issuer="https://token.actions.githubusercontent.com"
+```
+
+To inspect the Software Bill of Materials (SBOM) or build provenance for an operator image:
+
+<CodeGroup>
+
+```bash SBOM (SPDX format)
+docker buildx imagetools inspect ghcr.io/cloudnative-pg/cloudnative-pg:{tag} \
+  --format '{{ json (index .SBOM "linux/amd64").SPDX }}'
+```
+
+```bash SLSA provenance
+docker buildx imagetools inspect ghcr.io/cloudnative-pg/cloudnative-pg:{tag} \
+  --format '{{ json (index .Provenance "linux/amd64").SLSA }}'
+```
+
+</CodeGroup>
+
+### Verify PostgreSQL operand images
+
+CloudNativePG maintains container images for all supported PostgreSQL versions in the [`postgres-containers` project](https://github.com/cloudnative-pg/postgres-containers).
+
+To verify the signature of an operand image:
+
+```bash
+cosign verify ghcr.io/cloudnative-pg/postgresql:{tag} \
+  --certificate-identity-regexp="^https://github.com/cloudnative-pg/postgres-containers/" \
+  --certificate-oidc-issuer="https://token.actions.githubusercontent.com"
+```
+
+To inspect the SBOM or provenance for an operand image:
+
+<CodeGroup>
+
+```bash SBOM (SPDX format)
+docker buildx imagetools inspect ghcr.io/cloudnative-pg/postgresql:{tag} \
+  --format '{{ json (index .SBOM "linux/amd64").SPDX }}'
+```
+
+```bash SLSA provenance
+docker buildx imagetools inspect ghcr.io/cloudnative-pg/postgresql:{tag} \
+  --format '{{ json (index .Provenance "linux/amd64").SLSA }}'
+```
+
+</CodeGroup>

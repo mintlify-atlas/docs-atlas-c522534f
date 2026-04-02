@@ -1,28 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "CloudNativePG",
+  "projectType": "infrastructure",
+  "projectName": "CloudNativePG",
+  "projectDescription": "A Kubernetes-native operator that manages the full lifecycle of PostgreSQL clusters, providing automated failover, high availability, backup/recovery, and declarative database management.",
   "theme": "aspen",
-  "colors": {
-    "primary": "#2f206c",
-    "light": "#9494a6",
-    "dark": "#e6e5ea"
-  },
-  "favicon": "https://media.brand.dev/a2f6d410-6344-4226-ab3d-71485a90027c.jpg",
-  "logo": {
-    "light": "https://media.brand.dev/29f6e380-589e-48b8-be1f-16a0a6a3fc6b.svg",
-    "dark": "https://media.brand.dev/29f6e380-589e-48b8-be1f-16a0a6a3fc6b.svg"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/cloudnative-pg/cloudnative-pg"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/cloudnative-pg/cloudnative-pg"
-    }
-  },
+  "primaryColor": "#2f206c",
+  "lightColor": "#9494a6",
+  "darkColor": "#e6e5ea",
   "navigation": {
     "tabs": [
       {
@@ -103,5 +86,29 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Automated PostgreSQL failover and self-healing using Kubernetes-native mechanisms",
+    "High availability with primary/replica clusters and synchronous replication",
+    "Comprehensive backup and recovery via CNPG-I plugins, volume snapshots, and WAL archiving",
+    "Declarative management of PostgreSQL roles, databases, extensions, and tablespaces",
+    "Connection pooling via native PgBouncer (Pooler CRD) integration",
+    "Replica clusters for cross-Kubernetes-cluster disaster recovery and distributed topologies",
+    "Prometheus-compatible metrics exporter with customizable queries",
+    "kubectl plugin (cnpg) for simplified cluster operations",
+    "TLS support with cert-manager integration",
+    "Rolling updates with immutable infrastructure model"
+  ],
+  "publicApiSurface": [
+    "Cluster CRD (postgresql.cnpg.io/v1)",
+    "Backup CRD (postgresql.cnpg.io/v1)",
+    "ScheduledBackup CRD (postgresql.cnpg.io/v1)",
+    "Pooler CRD (postgresql.cnpg.io/v1)",
+    "Database CRD (postgresql.cnpg.io/v1)",
+    "Publication CRD (postgresql.cnpg.io/v1)",
+    "Subscription CRD (postgresql.cnpg.io/v1)",
+    "ImageCatalog CRD (postgresql.cnpg.io/v1)",
+    "ClusterImageCatalog CRD (postgresql.cnpg.io/v1)",
+    "kubectl cnpg plugin commands (status, promote, backup, restore, logs, fencing, etc.)"
+  ]
 }

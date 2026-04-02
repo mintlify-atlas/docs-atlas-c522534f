@@ -1,0 +1,99 @@
+---
+title: "PostgreSQL configuration"
+description: "Configure PostgreSQL parameters and client authentication in CloudNativePG."
+---
+
+CloudNativePG manages PostgreSQL configuration declaratively through the `Cluster` spec. You set parameters in `spec.postgresql.parameters` and client authentication rules in `spec.postgresql.pg_hba`.
+
+## Setting parameters
+
+```yaml
+spec:
+  postgresql:
+    parameters:
+      shared_buffers: "1GB"
+      max_connections: "200"
+      work_mem: "64MB"
+```
+
+The operator translates these key-value pairs into `postgresql.conf` entries and applies them across all instances. Changes are propagated automatically during reconciliation.
+
+<Warning>
+  Do not use `ALTER SYSTEM` to modify PostgreSQL configuration. Changes made with `ALTER SYSTEM` are written to `postgresql.auto.conf` on a single instance and are not replicated to other instances, which leads to configuration drift and unpredictable behavior.
+</Warning>
+
+## Client authentication
+
+Append rules to `pg_hba.conf` using `spec.postgresql.pg_hba`:
+
+```yaml
+spec:
+  postgresql:
+    pg_hba:
+      - host all all 10.0.0.0/8 scram-sha-256
+      - hostssl app appuser 0.0.0.0/0 scram-sha-256
+```
+
+Rules are appended after the operator's built-in entries. More specific rules should come first.
+
+## Configuration priority
+
+Parameters are applied in the following order, with later entries overriding earlier ones:
+
+1. **Global operator defaults** — set by the operator for all clusters.
+2. **Version-specific defaults** — applied based on the PostgreSQL major version.
+3. **User-defined parameters** — values from `spec.postgresql.parameters`.
+4. **Fixed parameters** — enforced by the operator and cannot be overridden (e.g., `data_directory`, `hba_file`).
+
+## Operator-managed default parameters
+
+The following parameters are set by the operator on all clusters. You can override most of them via `spec.postgresql.parameters`:
+
+```text
+archive_timeout = '5min'
+dynamic_shared_memory_type = 'posix'
+full_page_writes = 'on'
+logging_collector = 'on'
+log_destination = 'csvlog'
+max_parallel_workers = '32'
+max_replication_slots = '32'
+max_worker_processes = '32'
+ssl_max_protocol_version = 'TLSv1.3'
+ssl_min_protocol_version = 'TLSv1.3'
+wal_keep_size = '512MB'
+wal_level = 'logical'
+wal_log_hints = 'on'
+wal_sender_timeout = '5s'
+wal_receiver_timeout = '5s'
+```
+
+<Note>
+  Parameters such as `wal_level = 'logical'` and `wal_log_hints = 'on'` are required for CloudNativePG's replication and backup features. Lowering `wal_level` will break replication.
+</Note>
+
+## Parameters requiring a restart
+
+Some PostgreSQL parameters require a server restart to take effect. When you change one of these parameters, the operator performs a rolling restart of the cluster to apply the new value. Examples include:
+
+- `max_connections`
+- `shared_buffers`
+- `wal_level`
+
+Parameters that only require a reload (no restart) are applied without downtime.
+
+## Synchronous replication
+
+Configure synchronous replication via `spec.postgresql.synchronous`:
+
+```yaml
+spec:
+  postgresql:
+    synchronous:
+      method: any
+      number: 1
+```
+
+| Field | Description |
+|-------|-------------|
+| `method` | `any` — any one of the listed standbys; `first` — the first N listed standbys |
+| `number` | Number of synchronous standbys required to confirm a write |

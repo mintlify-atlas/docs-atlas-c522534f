@@ -1,0 +1,110 @@
+---
+title: "Pooler"
+description: "PgBouncer connection pooler for a CloudNativePG cluster."
+---
+
+The `Pooler` CRD deploys a PgBouncer connection pooler in front of a CloudNativePG cluster. You can create multiple poolers per cluster to handle separate read-write and read-only workloads.
+
+## Example
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: pooler-example-rw
+spec:
+  cluster:
+    name: cluster-example
+  instances: 3
+  type: rw
+  pgbouncer:
+    poolMode: transaction
+    parameters:
+      max_client_conn: "1000"
+      default_pool_size: "10"
+```
+
+## Spec fields
+
+<ParamField path="spec.cluster.name" type="string" required>
+  Name of the target `Cluster` resource. The `Pooler` must be in the same namespace as the cluster.
+</ParamField>
+
+<ParamField path="spec.instances" type="number" default="1">
+  Number of PgBouncer pods to deploy.
+</ParamField>
+
+<ParamField path="spec.type" type="string" required>
+  Service type for the pooler. Accepted values:
+
+  - `rw` — connects to the read-write service (`-rw`), routing to the primary.
+  - `ro` — connects to the read-only service (`-ro`), routing to replicas.
+</ParamField>
+
+<ParamField path="spec.pgbouncer.poolMode" type="string" default="session">
+  PgBouncer pooling mode. Accepted values:
+
+  - `session` — a server connection is held for the full duration of the client session.
+  - `transaction` — a server connection is held only for the duration of a transaction.
+  - `statement` — a server connection is held only for a single statement. Transactions spanning multiple statements are not supported.
+</ParamField>
+
+<ParamField path="spec.pgbouncer.parameters" type="object">
+  Key-value map of PgBouncer configuration parameters, such as `max_client_conn`, `default_pool_size`, and `server_idle_timeout`.
+</ParamField>
+
+<ParamField path="spec.template" type="object">
+  Pod template for advanced customization of PgBouncer pods, including resource requests/limits, environment variables, and volumes.
+</ParamField>
+
+<ParamField path="spec.serviceTemplate" type="object">
+  Customization for the Kubernetes Service created for the pooler, including annotations and labels.
+</ParamField>
+
+<ParamField path="spec.paused" type="boolean" default="false">
+  When set to `true`, PgBouncer pauses all new connections. Existing connections complete normally. Use this to quiesce traffic before maintenance.
+</ParamField>
+
+## Constraints
+
+<Warning>
+  The `Pooler` resource name must not be the same as any `Cluster` name in the same namespace. Using the same name causes a conflict with operator-managed services.
+</Warning>
+
+<Warning>
+  When overriding container settings in `spec.template`, the container name **must** be `pgbouncer`. Any other name is ignored.
+</Warning>
+
+## Metrics
+
+PgBouncer exposes Prometheus metrics on port `9127` of each pod. Configure your `ServiceMonitor` or scrape configuration to target that port.
+
+## Multiple poolers
+
+You can create separate read-write and read-only poolers for the same cluster:
+
+```yaml
+# Read-write pooler
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: pooler-rw
+spec:
+  cluster:
+    name: cluster-example
+  type: rw
+  pgbouncer:
+    poolMode: transaction
+---
+# Read-only pooler
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: pooler-ro
+spec:
+  cluster:
+    name: cluster-example
+  type: ro
+  pgbouncer:
+    poolMode: session
+```

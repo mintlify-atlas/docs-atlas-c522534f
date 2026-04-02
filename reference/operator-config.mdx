@@ -1,0 +1,61 @@
+---
+title: "Operator configuration"
+description: "Environment variables for configuring the CloudNativePG operator via ConfigMap or Secret."
+---
+
+The CloudNativePG operator is configured through a `ConfigMap` or `Secret` named `cnpg-controller-manager-config` in the `cnpg-system` namespace. Changes to this resource are picked up by the operator at runtime without requiring a restart.
+
+## Example ConfigMap
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cnpg-controller-manager-config
+  namespace: cnpg-system
+data:
+  CLUSTERS_ROLLOUT_DELAY: '60'
+  ENABLE_INSTANCE_MANAGER_INPLACE_UPDATES: 'true'
+  INHERITED_ANNOTATIONS: categories
+  INHERITED_LABELS: environment, workload, app
+  INSTANCES_ROLLOUT_DELAY: '10'
+```
+
+## Configuration reference
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CERTIFICATE_DURATION` | Lifetime of operator-managed certificates, in days | `90` |
+| `CLUSTERS_ROLLOUT_DELAY` | Seconds to wait between cluster roll-outs during an operator upgrade | `0` |
+| `CREATE_ANY_SERVICE` | Create the `-any` service for each cluster | `false` |
+| `DRAIN_TAINTS` | Comma-separated taint keys that indicate a node is being drained (e.g., by the autoscaler) | kubectl and autoscaler defaults |
+| `ENABLE_INSTANCE_MANAGER_INPLACE_UPDATES` | Enable in-place updates for the instance manager binary, avoiding pod restarts on minor operator upgrades | `false` |
+| `EXPIRING_CHECK_THRESHOLD` | Number of days before expiry at which a certificate is considered expiring | `7` |
+| `INCLUDE_PLUGINS` | Comma-separated list of plugin names to include in `Cluster` reconciliation | — |
+| `INHERITED_ANNOTATIONS` | Space or comma-separated annotation keys from the `Cluster` resource that are propagated to all managed resources | — |
+| `INHERITED_LABELS` | Space or comma-separated label keys from the `Cluster` resource that are propagated to all managed resources | — |
+| `INSTANCES_ROLLOUT_DELAY` | Seconds to wait between instance roll-outs within a single cluster during an upgrade | `0` |
+| `KUBERNETES_CLUSTER_DOMAIN` | Domain suffix appended to service FQDNs | `cluster.local` |
+| `METRICS_CERT_DIR` | Directory path for TLS certificates used by the metrics endpoint | — |
+| `MONITORING_QUERIES_CONFIGMAP` | Name of a `ConfigMap` containing default Prometheus monitoring queries | — |
+| `MONITORING_QUERIES_SECRET` | Name of a `Secret` containing default Prometheus monitoring queries | — |
+| `OPERATOR_IMAGE_NAME` | Operator container image name | Installation default |
+| `PGBOUNCER_IMAGE_NAME` | Default PgBouncer container image used when creating `Pooler` resources | Operator default |
+| `POSTGRES_IMAGE_NAME` | Default PostgreSQL container image used when `spec.imageName` is not set on a `Cluster` | Operator default |
+| `PULL_SECRET_NAME` | Name of an additional image pull secret to attach to all managed pods | — |
+| `STANDBY_TCP_USER_TIMEOUT` | `TCP_USER_TIMEOUT` socket option (in milliseconds) for standby-to-primary connections | `5000` |
+| `WATCH_NAMESPACE` | Comma-separated list of namespaces for the operator to watch. Empty string means all namespaces | all namespaces |
+
+## Notes
+
+<Note>
+  Sensitive values such as pull secret names or image registry credentials should be placed in a `Secret` named `cnpg-controller-manager-config` rather than a `ConfigMap`. The operator reads from whichever resource exists; if both exist, the `Secret` takes precedence.
+</Note>
+
+<Tip>
+  Set `INHERITED_LABELS` and `INHERITED_ANNOTATIONS` to automatically propagate organizational metadata — such as team, environment, or cost-center labels — from `Cluster` resources to all pods, services, and other managed objects.
+</Tip>
+
+<Warning>
+  Changing `WATCH_NAMESPACE` requires careful planning in multi-tenant environments. Restricting the operator to specific namespaces prevents it from managing clusters in other namespaces.
+</Warning>

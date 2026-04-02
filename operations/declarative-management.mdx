@@ -1,0 +1,212 @@
+---
+title: 'Declarative database management'
+description: 'Manage PostgreSQL databases, extensions, schemas, and foreign data wrappers declaratively using the Database CRD in CloudNativePG.'
+keywords: ['database', 'declarative', 'Database CRD', 'extensions', 'schemas', 'foreign data wrapper', 'FDW']
+---
+
+CloudNativePG supports declarative management of PostgreSQL databases through the `Database` CRD. This lets you define and control the lifecycle of PostgreSQL databases using Kubernetes manifests, integrating database provisioning into your GitOps workflows.
+
+<Info>
+CloudNativePG manages **global objects** in PostgreSQL clusters, including databases, roles, and tablespaces. It does not manage database content beyond extensions and schemas (for example, tables). Use application-level tooling to manage table schemas.
+</Info>
+
+## Database manifest
+
+The `Database` resource creates and manages a PostgreSQL database within a target cluster:
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: cluster-example-one
+spec:
+  name: one
+  owner: app
+  cluster:
+    name: cluster-example
+  extensions:
+    - name: bloom
+      ensure: present
+```
+
+### Required fields
+
+| Field | Description |
+|---|---|
+| `metadata.name` | Unique name for the Kubernetes object within its namespace. |
+| `spec.name` | Name of the database as it appears in PostgreSQL. |
+| `spec.owner` | PostgreSQL role that owns the database. |
+| `spec.cluster.name` | Name of the target CloudNativePG cluster. |
+
+<Info>
+The separation between `metadata.name` and `spec.name` allows multiple `Database` resources to reference databases with the same name across different CloudNativePG clusters in the same Kubernetes namespace.
+</Info>
+
+## Reserved database names
+
+The names `postgres`, `template0`, and `template1` are reserved by PostgreSQL. Creating a `Database` resource with any of these values in `spec.name` is not allowed.
+
+## Reconciliation status
+
+After successful reconciliation, the status fields reflect the applied state:
+
+```yaml
+status:
+  applied: true
+  observedGeneration: 1
+```
+
+If reconciliation fails, `status.applied` is `false` and `status.message` contains the error details.
+
+## Deleting a database
+
+<Tabs>
+  <Tab title="Reclaim policy">
+    Use `databaseReclaimPolicy: delete` to automatically drop the PostgreSQL database when the `Database` object is deleted from Kubernetes:
+
+    ```yaml
+    apiVersion: postgresql.cnpg.io/v1
+    kind: Database
+    metadata:
+      name: cluster-example-two
+    spec:
+      databaseReclaimPolicy: delete
+      name: two
+      owner: app
+      cluster:
+        name: cluster-example
+    ```
+
+    The default reclaim policy is `retain`, which leaves the database in PostgreSQL for manual management.
+  </Tab>
+  <Tab title="Declarative removal">
+    Set `ensure: absent` to drop the database without deleting the `Database` Kubernetes object:
+
+    ```yaml
+    apiVersion: postgresql.cnpg.io/v1
+    kind: Database
+    metadata:
+      name: cluster-example-database-to-drop
+    spec:
+      cluster:
+        name: cluster-example
+      name: database-to-drop
+      owner: app
+      ensure: absent
+    ```
+  </Tab>
+</Tabs>
+
+## Extensions
+
+Declare extensions in `spec.extensions`. CloudNativePG reconciles only the extensions listed; any existing extensions not specified are left unchanged.
+
+```yaml
+spec:
+  extensions:
+    - name: bloom
+      ensure: present
+    - name: pg_trgm
+      ensure: present
+      schema: public
+    - name: old_extension
+      ensure: absent
+```
+
+Each extension entry supports:
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | Name of the extension. |
+| `ensure` | No | `present` (default) or `absent`. |
+| `version` | No | Specific version to install or upgrade to. |
+| `schema` | No | Schema in which to install the extension. |
+
+CloudNativePG uses `CREATE EXTENSION`, `DROP EXTENSION`, and `ALTER EXTENSION` (limited to `UPDATE TO` and `SET SCHEMA`).
+
+<Warning>
+Ensure there are no conflicts between extensions declared in the `Database` CRD and the [managed extensions](https://cloudnative-pg.io/documentation/current/postgresql_conf/#managed-extensions) feature (such as `pg_stat_statements`).
+</Warning>
+
+## Schemas
+
+Declare schemas in `spec.schemas`. CloudNativePG reconciles only the schemas listed; existing schemas not specified are left unchanged.
+
+```yaml
+spec:
+  schemas:
+    - name: app
+      owner: app
+    - name: reporting
+      owner: app
+      ensure: present
+```
+
+Each schema entry supports:
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | Name of the schema. |
+| `owner` | No | Owner role for the schema. |
+| `ensure` | No | `present` (default) or `absent`. |
+
+## Foreign data wrappers
+
+Declare FDWs in `spec.fdws`. CloudNativePG reconciles only the FDWs listed; existing FDWs not specified are left unchanged.
+
+```yaml
+spec:
+  fdws:
+    - name: postgres_fdw
+      usage:
+        - name: app
+          type: grant
+```
+
+<Warning>
+PostgreSQL restricts FDW ownership to roles with superuser privileges. Attempting to assign ownership to a non-superuser role will be ignored. FDWs are owned by the `postgres` user by default.
+</Warning>
+
+### Foreign servers
+
+Declare foreign servers in `spec.servers`. Each server must reference an existing FDW defined in `spec.fdws`:
+
+```yaml
+spec:
+  servers:
+    - name: angus
+      fdw: postgres_fdw
+      ensure: present
+      usage:
+        - name: app
+          type: grant
+      options:
+        - name: host
+          value: angus-rw
+        - name: dbname
+          value: app
+```
+
+<Info>
+CloudNativePG does not currently support declarative configuration of user mappings. You can manage user mappings as part of your SQL schema once the FDW and foreign server are defined.
+</Info>
+
+## Limitations
+
+<AccordionGroup>
+  <Accordion title="Renaming databases is not supported">
+    Modifying `spec.name` in an existing `Database` object is rejected by Kubernetes. To rename a database, delete the existing `Database` object and create a new one.
+  </Accordion>
+  <Accordion title="Some fields are immutable">
+    Fields such as encoding and collation settings are immutable in PostgreSQL. Attempts to modify these on existing databases are ignored. Errors are reflected in `status.message`.
+  </Accordion>
+  <Accordion title="Replica clusters">
+    `Database` objects declared on replica clusters cannot be enforced, as replicas are read-only. These objects remain in a pending state until the replica is promoted to primary.
+  </Accordion>
+  <Accordion title="Conflict resolution">
+    If two `Database` objects in the same namespace manage the same PostgreSQL database (matching `spec.name` and `spec.cluster.name`), the second object is rejected with an error in its status.
+  </Accordion>
+  <Accordion title="Manual changes are preserved">
+    CloudNativePG does not overwrite manual changes to databases. A `Database` object is not reapplied unless its `metadata.generation` changes.
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,103 @@
+---
+title: "Logging"
+description: "Understand CloudNativePG's JSON log format, configure log levels for clusters and the operator, and integrate with Kubernetes log management tools."
+keywords: ["logging", "json", "log levels", "postgres logs", "operator logs", "observability"]
+---
+
+CloudNativePG outputs all logs — including PostgreSQL logs — in JSON format to standard output (`stdout`). Logs are never persisted to storage, which simplifies integration with Kubernetes-compatible log management tools such as [stern](https://github.com/stern/stern).
+
+<Info>
+  Long-term log storage and management are outside the scope of the operator. Handle log retention at the Kubernetes infrastructure level. See the [Kubernetes Logging Architecture](https://kubernetes.io/docs/concepts/cluster-administration/logging/) for guidance.
+</Info>
+
+## Log entry structure
+
+Every log entry includes the following fields:
+
+| Field | Description |
+|-------|-------------|
+| `level` | Log level — for example, `info` or `error`. |
+| `ts` | Unix timestamp of the log entry. |
+| `logger` | Log source type — for example, `postgres` or `pg_controldata`. |
+| `msg` | Log message text, or the keyword `record` when the message is a structured JSON object. |
+| `record` | Structured log data when `msg` is `record`. Schema varies by `logger` type. |
+| `logging_pod` | Name of the pod that generated the log entry. |
+
+<Info>
+  If your log ingestion system requires different field names, you can rename the `level` and `ts` fields using the `--log-field-level` and `--log-field-timestamp` flags on the operator controller. Edit the `Deployment` definition of the `cloudnative-pg` operator to apply these flags.
+</Info>
+
+## Log levels
+
+CloudNativePG supports the following log levels, from least to most verbose:
+
+- `error`
+- `warning`
+- `info` (default)
+- `debug`
+- `trace`
+
+## Cluster log level
+
+Configure the log level for instance pods in the `Cluster` spec using the `logLevel` field:
+
+```yaml
+spec:
+  logLevel: debug
+```
+
+<Warning>
+  The log level can only be set when an instance starts. Changes to `logLevel` in a running cluster apply only to new pods, not to existing ones.
+</Warning>
+
+## Operator log level
+
+Configure the operator's log level by editing the `Deployment` definition of the `cloudnative-pg` operator and setting the `--log-level` argument:
+
+```yaml
+containers:
+- name: manager
+  args:
+  - --log-level=debug
+```
+
+## PostgreSQL log entries
+
+Each PostgreSQL log entry has `"logger": "postgres"` and `"msg": "record"`. The actual log data appears in the `record` field:
+
+```json
+{
+  "level": "info",
+  "ts": 1619781249.7188137,
+  "logger": "postgres",
+  "msg": "record",
+  "record": {
+    "log_time": "2021-04-30 11:14:09.718 UTC",
+    "user_name": "",
+    "database_name": "",
+    "process_id": "25",
+    "connection_from": "",
+    "session_id": "608be681.19",
+    "session_line_num": "1",
+    "command_tag": "",
+    "session_start_time": "2021-04-30 11:14:09 UTC",
+    "virtual_transaction_id": "",
+    "transaction_id": "0",
+    "error_severity": "LOG",
+    "sql_state_code": "00000",
+    "message": "database system was interrupted; last known up at 2021-04-30 11:14:07 UTC",
+    "detail": "",
+    "hint": "",
+    "internal_query": "",
+    "internal_query_pos": "",
+    "context": "",
+    "query": "",
+    "query_pos": "",
+    "location": "",
+    "application_name": "",
+    "backend_type": "startup"
+  }
+}
+```
+
+The fields inside `record` correspond directly to the columns of the PostgreSQL `pg_log` CSV log format.

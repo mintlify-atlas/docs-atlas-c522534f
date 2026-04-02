@@ -1,0 +1,182 @@
+---
+title: 'Backup and recovery'
+description: 'Configure physical backups for CloudNativePG clusters using CNPG-I plugins, volume snapshots, or scheduled backup resources.'
+keywords: ['backup', 'recovery', 'barman', 'scheduled backup', 'PITR', 'volume snapshot', 'WAL archive']
+---
+
+CloudNativePG supports **physical backups** of PostgreSQL clusters. Logical backups using `pg_dump` are not managed by CloudNativePG and are not suitable for business continuity.
+
+<Info>
+Starting with version 1.26, native backup and recovery capabilities are being progressively phased out of the core operator and moved to official CNPG-I plugins. This transition supports a **backup-agnostic architecture** standardizing WAL archiving, physical base backups, and recovery through the CNPG-I extensible interface.
+</Info>
+
+## Backup approaches
+
+CloudNativePG supports two main approaches for physical backups:
+
+- **CNPG-I plugins** (recommended): The officially supported [Barman Cloud Plugin](https://cloudnative-pg.io/plugin-barman-cloud/) integrates with object storage services such as AWS S3, Azure Blob Storage, and GCS.
+- **Native**: Kubernetes volume snapshots, supported when the underlying storage class provides CSI snapshot capability. The native `barmanObjectStore` method is deprecated since v1.26 in favor of the Barman Cloud Plugin.
+
+## Backup methods
+
+Use `.spec.method` in `Backup` and `ScheduledBackup` resources to select the method:
+
+| Method | Description |
+|---|---|
+| `plugin` | Uses a CNPG-I plugin. Requires `.spec.pluginConfiguration`. Recommended for object store backups. |
+| `volumeSnapshot` | Uses Kubernetes CSI volume snapshots. |
+| `barmanObjectStore` | Native Barman Cloud integration. Deprecated since v1.26. Still the default for backward compatibility. |
+
+## Object store vs volume snapshots
+
+| Feature | Object store | Volume snapshots |
+|---|:---:|:---:|
+| WAL archiving | Required | Recommended |
+| Cold backup | No | Yes |
+| Hot backup | Yes | Yes |
+| Incremental copy | No | Yes (storage-class dependent) |
+| Differential copy | No | Yes (storage-class dependent) |
+| Backup from a standby | Yes | Yes |
+| Retention policies | Yes | No |
+| Point-in-Time Recovery (PITR) | Yes | Requires WAL archive |
+| Underlying technology | Barman Cloud | Kubernetes API |
+
+**When to prefer volume snapshots:** For very large databases (VLDBs), volume snapshots enable faster recovery due to copy-on-write technology, improving your Recovery Time Objective (RTO).
+
+**When to prefer object store:** When you need retention policies, cross-region data mobility, or when your storage class does not support CSI snapshots.
+
+## WAL archive
+
+The WAL archive is the foundation of continuous backup in CloudNativePG. It enables:
+
+- **Hot backups**: physical base backups taken without shutting down the server.
+- **Point-in-Time Recovery (PITR)**: restore to any point in time since the first available base backup.
+
+<Warning>
+WAL archive alone is not sufficient. Without a physical base backup, you cannot restore a PostgreSQL cluster.
+</Warning>
+
+<Tip>
+Always set up the WAL archive in production. CloudNativePG provides an RPO of 5 minutes or less when WAL archiving is configured, even across regions.
+</Tip>
+
+## Scheduled backups
+
+The `ScheduledBackup` CRD defines automated backup schedules using a **six-field cron expression** that includes seconds as the first field. This differs from the standard Unix `crontab` format.
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: backup-example
+spec:
+  schedule: "0 0 0 * * *"  # At midnight every day
+  backupOwnerReference: self
+  cluster:
+    name: pg-backup
+```
+
+<Warning>
+The schedule format uses six fields including seconds: `seconds minutes hours day-of-month month day-of-week`. The equivalent Kubernetes CronJob expression for midnight daily would be `0 0 * * *` (no seconds field).
+</Warning>
+
+### Schedule options
+
+**Trigger an immediate backup on creation:**
+
+```yaml
+spec:
+  immediate: true
+```
+
+**Pause scheduled backups:**
+
+```yaml
+spec:
+  suspend: true
+```
+
+### Backup owner reference
+
+`.spec.backupOwnerReference` controls which Kubernetes object is set as the owner of resulting `Backup` resources:
+
+| Value | Behavior |
+|---|---|
+| `none` | No owner reference (legacy behavior) |
+| `self` | The `ScheduledBackup` object becomes the owner |
+| `cluster` | The PostgreSQL `Cluster` becomes the owner |
+
+## On-demand backups
+
+Create a `Backup` resource to trigger an immediate backup at any time:
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Backup
+metadata:
+  name: backup-example
+spec:
+  method: barmanObjectStore
+  cluster:
+    name: pg-backup
+```
+
+### Monitor backup progress
+
+```bash
+kubectl describe backup backup-example
+```
+
+While running, the output shows `phase: running`. On completion:
+
+```text
+Status:
+  Backup Id:         20201026T135740
+  Destination Path:  s3://backups/
+  Phase:             completed
+  Started At:        2020-10-26T13:57:40Z
+  Stopped At:        2020-10-26T13:57:44Z
+```
+
+<Info>
+On-demand backups do not include Kubernetes secrets for the PostgreSQL superuser or application user. Include these secrets in your broader Kubernetes cluster backup strategy.
+</Info>
+
+## Backup from a standby
+
+By default, CloudNativePG performs backups on the **most up-to-date replica** (`prefer-standby`), falling back to the primary if no replicas are available. This reduces I/O contention on the primary.
+
+To always back up from the primary, set the cluster-level target:
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pg-backup
+spec:
+  backup:
+    target: "primary"
+```
+
+<Warning>
+Using `primary` as the target for cold backups with volume snapshots requires temporarily shutting down the primary instance, interrupting all write operations. Apply the same caution to single-instance clusters.
+</Warning>
+
+You can also override the cluster-level target per backup:
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Backup
+metadata:
+  name: backup-example
+spec:
+  cluster:
+    name: pg-backup
+  target: "primary"
+```
+
+## Retention policies
+
+<Warning>
+The `spec.backup.retentionPolicy` field in the `Cluster` resource is deprecated and will be removed in a future release. Configure retention through the backup plugin you are using (for example, the [Barman Cloud Plugin retention documentation](https://cloudnative-pg.io/plugin-barman-cloud/docs/retention/)).
+</Warning>

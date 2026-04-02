@@ -1,0 +1,104 @@
+---
+title: "kubectl plugin"
+description: "Install and configure the CloudNativePG kubectl plugin (kubectl-cnpg)."
+---
+
+The `cnpg` kubectl plugin provides commands for managing CloudNativePG clusters from the command line. It wraps common operational tasks into a single `kubectl cnpg` interface.
+
+## Installation
+
+<Tabs>
+  <Tab title="Install script">
+    ```bash
+    curl -sSfL \
+      https://github.com/cloudnative-pg/cloudnative-pg/raw/main/hack/install-cnpg-plugin.sh \
+      | sudo sh -s -- -b /usr/local/bin
+    ```
+  </Tab>
+  <Tab title="Krew">
+    ```bash
+    kubectl krew install cnpg
+    ```
+
+    Requires [Krew](https://krew.sigs.k8s.io/) to be installed.
+  </Tab>
+  <Tab title="Homebrew">
+    ```bash
+    brew install kubectl-cnpg
+    ```
+  </Tab>
+  <Tab title="Debian / Ubuntu">
+    Download the `.deb` package from the [releases page](https://github.com/cloudnative-pg/cloudnative-pg/releases) and install with:
+
+    ```bash
+    sudo dpkg -i kubectl-cnpg_<version>_linux_amd64.deb
+    ```
+  </Tab>
+  <Tab title="RPM">
+    Download the `.rpm` package from the [releases page](https://github.com/cloudnative-pg/cloudnative-pg/releases) and install with:
+
+    ```bash
+    sudo rpm -i kubectl-cnpg_<version>_linux_amd64.rpm
+    ```
+  </Tab>
+  <Tab title="AUR (Arch Linux)">
+    ```bash
+    paru -S kubectl-cnpg
+    ```
+  </Tab>
+</Tabs>
+
+## Supported platforms
+
+| OS | Architectures |
+|----|---------------|
+| Linux | `amd64`, `arm64`, `s390x`, `ppc64le` |
+| macOS | `amd64`, `arm64` |
+| Windows | `386`, `amd64`, `arm64` |
+
+## Basic usage
+
+```bash
+kubectl cnpg COMMAND [ARGS...]
+```
+
+Run `kubectl cnpg --help` to see the full list of available commands.
+
+## Shell auto-completion
+
+To enable shell auto-completion for `kubectl cnpg`, create a wrapper script named `kubectl_complete-cnpg`:
+
+<Tabs>
+  <Tab title="bash / zsh">
+    ```bash
+    cat <<'EOF' | sudo tee /usr/local/bin/kubectl_complete-cnpg
+    #!/usr/bin/env sh
+    exec kubectl cnpg __complete "$@"
+    EOF
+    sudo chmod +x /usr/local/bin/kubectl_complete-cnpg
+    ```
+  </Tab>
+  <Tab title="fish">
+    ```fish
+    cat <<'EOF' | sudo tee /usr/local/bin/kubectl_complete-cnpg
+    #!/usr/bin/env sh
+    exec kubectl cnpg __complete $argv
+    EOF
+    sudo chmod +x /usr/local/bin/kubectl_complete-cnpg
+    ```
+  </Tab>
+</Tabs>
+
+Once the script is in place, your shell will provide tab completion for `kubectl cnpg` commands, flags, and cluster names.
+
+<Note>
+  The completion script must be on your `PATH` and executable. Restart your shell or source your profile after creating the file.
+</Note>
+
+## Verifying installation
+
+```bash
+kubectl cnpg version
+```
+
+This prints the plugin version and confirms it is correctly installed and accessible via `kubectl`.

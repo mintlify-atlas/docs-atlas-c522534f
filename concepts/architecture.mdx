@@ -1,0 +1,168 @@
+---
+title: "Architecture"
+description: "How CloudNativePG deploys PostgreSQL on Kubernetes, from single-cluster HA to multi-cluster disaster recovery."
+keywords: ["architecture", "high availability", "kubernetes", "availability zones", "replica clusters", "shared-nothing"]
+---
+
+CloudNativePG treats PostgreSQL as a stateful workload and builds high availability around PostgreSQL's own replication capabilities rather than storage-level techniques.
+
+## Synchronizing state
+
+To replicate a database, you can use either of two strategies:
+
+- **Storage-level replication** — replicate persistent volume data between nodes at the infrastructure layer.
+- **Application-level replication** — replicate using the database engine's native mechanisms.
+
+CloudNativePG uses **application-level replication** exclusively, relying on PostgreSQL's built-in physical replication based on **Write Ahead Log (WAL) shipping**. PostgreSQL supports both asynchronous and synchronous streaming replication over the network, and asynchronous file-based log shipping as a fallback (for example, to an object store).
+
+<Warning>
+  CloudNativePG does not recommend storage-level replication for PostgreSQL, even though the operator allows it. Storage-level replication combined with application-level replication introduces unnecessary complexity and write amplification. See [Block storage considerations](/concepts/storage#block-storage-considerations-cephlonghorn) for how to configure block storage solutions like Ceph and Longhorn correctly.
+</Warning>
+
+## Kubernetes architecture
+
+Kubernetes can span multiple physical locations — availability zones — connected by redundant, low-latency private networks. The recommended minimum number of availability zones for a production Kubernetes cluster is three, which keeps the control plane resilient to a single-zone failure.
+
+<Tip>
+  Most managed Kubernetes services (EKS, GKE, AKS) already provide three or more availability zones per region.
+</Tip>
+
+### Multi-availability zone clusters
+
+A Kubernetes cluster spanning three or more availability zones is the recommended setup for CloudNativePG. In this topology, CloudNativePG manages the full `Cluster` lifecycle across zones within a single Kubernetes cluster — scheduling, automated failover, self-healing, and rolling updates all work seamlessly across zones.
+
+Key capabilities in a multi-AZ cluster:
+
+- Workloads are distributed declaratively across zones using affinity rules, tolerations, and node selectors.
+- Failover and self-healing are fully automated within the single Kubernetes cluster.
+- Replica clusters in other regions can provide disaster recovery (DR) and read-only scale-out.
+
+<Info>
+  Each CloudNativePG operator deployment manages only its local Kubernetes cluster. Coordinating operations across Kubernetes clusters — such as promoting a replica cluster during a regional outage — must be handled manually or by a higher-level tool (such as a GitOps pipeline).
+</Info>
+
+### Single availability zone clusters
+
+If only one availability zone is available — typical of self-managed on-premise Kubernetes — CloudNativePG still provides substantial HA capabilities, pushing the single point of failure to the zone level. In this scenario:
+
+- PostgreSQL instances must be placed on different worker nodes and must not share storage.
+- Disaster recovery requires separate Kubernetes clusters, since a single-zone setup cannot form a multi-AZ cluster.
+
+<Tip>
+  If your infrastructure started as a two-datacenter lift-and-shift from traditional VMs, consider whether a third physical location is feasible. A three-zone setup moves operational complexity from the application layer down to the infrastructure layer and reduces overall cost.
+</Tip>
+
+## Reserving nodes for PostgreSQL workloads
+
+Whether in a multi-AZ or single-AZ setup, CloudNativePG recommends dedicating specific Kubernetes worker nodes — called **Postgres nodes** — exclusively to PostgreSQL workloads in production. This ensures predictable performance and resource isolation.
+
+<Tip>
+  Deploy Postgres nodes in multiples of three, with one node per availability zone. A three-node setup distributes one primary and two standbys across separate nodes, maximizing fault tolerance.
+</Tip>
+
+Use Kubernetes **node labels** to mark nodes as eligible for PostgreSQL workloads, and **node taints** to prevent non-PostgreSQL pods from being scheduled on those nodes.
+
+### Labeling Postgres nodes
+
+Apply the `node-role.kubernetes.io/postgres` label to each Postgres node:
+
+```sh
+kubectl label node <NODE-NAME> node-role.kubernetes.io/postgres=
+```
+
+Configure the `Cluster` resource to require this label using `nodeSelector`:
+
+```yaml
+spec:
+  affinity:
+    nodeSelector:
+      node-role.kubernetes.io/postgres: ""
+```
+
+### Tainting Postgres nodes
+
+Apply the corresponding taint to prevent non-PostgreSQL workloads from landing on Postgres nodes:
+
+```sh
+kubectl taint node <NODE-NAME> node-role.kubernetes.io/postgres=:NoSchedule
+```
+
+Allow the `Cluster` resource to tolerate this taint:
+
+```yaml
+spec:
+  affinity:
+    tolerations:
+    - key: node-role.kubernetes.io/postgres
+      operator: Exists
+      effect: NoSchedule
+```
+
+<Note>
+  Because `node-role.kubernetes.io` is a reserved Kubernetes label prefix, the label can only be applied after a worker node is created.
+</Note>
+
+## PostgreSQL architecture
+
+Within a single Kubernetes cluster, CloudNativePG manages a PostgreSQL cluster with:
+
+- One **primary** instance that accepts read/write connections.
+- Zero or more **hot standby replicas** for HA and read-only scale-out.
+
+Three services are created automatically:
+
+| Service | Targets | Purpose |
+|---------|---------|---------|
+| `<cluster>-rw` | Primary only | Read/write application connections |
+| `<cluster>-ro` | Hot standbys only | Read-only workloads, offload from primary |
+| `<cluster>-r` | Any instance | Read-only workloads across all instances |
+
+CloudNativePG updates these services automatically when the cluster topology changes — for example, the `-rw` service is immediately re-pointed to the new primary after a failover.
+
+<Info>
+  You can customize these services through the `managed.services` section in the `Cluster` spec — reducing the number of services or changing the service type (default: `ClusterIP`).
+</Info>
+
+### Shared-nothing architecture
+
+CloudNativePG recommends a **shared-nothing** deployment for maximum resilience:
+
+- Each PostgreSQL instance runs on a **different Kubernetes worker node**.
+- Each instance uses its own **dedicated storage volume** — preferably locally attached.
+- In multi-AZ clusters, instances are distributed across **different availability zones**.
+
+This design ensures that a single node, disk, or zone failure affects at most one PostgreSQL instance at a time.
+
+## Deployments across Kubernetes clusters
+
+For disaster recovery and cross-region availability, CloudNativePG supports **distributed PostgreSQL topologies** using replica clusters. A replica cluster is a separate `Cluster` resource in continuous recovery, streaming WAL from a primary cluster in another Kubernetes cluster (or falling back to WAL files from an object store).
+
+Key properties of replica clusters:
+
+- A replica cluster has a **designated primary** — a standby that can be promoted to accept write traffic.
+- The designated primary can have its own cascading standbys for local HA.
+- Promotion transforms the replica cluster into a fully independent primary cluster.
+
+Promotion is triggered by one of two events:
+
+- **Controlled switchover** — you first demote the current primary cluster, then promote the replica cluster. This avoids data loss and allows the former primary to re-join without re-cloning.
+- **Emergency failover** — if the entire primary Kubernetes cluster fails, you promote the replica cluster and accept potential data loss.
+
+<Warning>
+  CloudNativePG cannot perform automated failover across Kubernetes clusters. The operator has authority only within its own Kubernetes cluster. Cross-cluster failover must be initiated manually or by a multi-cluster management tool.
+</Warning>
+
+<Columns cols={2}>
+  <Card title="Replication" icon="arrows-rotate" href="/concepts/replication">
+    How CloudNativePG manages streaming replication, synchronous settings, and replication slots within a cluster.
+  </Card>
+  <Card title="Failover" icon="shield-exclamation" href="/concepts/failover">
+    How automated failover and quorum-based promotion work when a primary becomes unavailable.
+  </Card>
+  <Card title="Storage" icon="hard-drive" href="/concepts/storage">
+    PVC management, WAL volumes, volume expansion, and block storage recommendations.
+  </Card>
+  <Card title="Replica clusters" icon="diagram-project" href="/operations/replica-clusters">
+    Distributed PostgreSQL topologies across Kubernetes clusters for disaster recovery.
+  </Card>
+</Columns>

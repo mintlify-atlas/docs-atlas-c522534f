@@ -1,0 +1,72 @@
+---
+title: "Labels and annotations"
+description: "Predefined labels and annotations used by CloudNativePG on managed Kubernetes resources."
+---
+
+CloudNativePG uses labels and annotations on the Kubernetes resources it manages to expose metadata, enable filtering, and integrate with external tools.
+
+- **Labels** are used for grouping and selecting resources (e.g., pod selectors, monitoring scrape targets).
+- **Annotations** are used for external tool integration and carrying metadata that does not affect scheduling or selection.
+
+## Inheriting labels and annotations
+
+You can configure the operator to propagate labels and annotations from a `Cluster` resource to all managed objects (pods, services, PVCs, etc.) by setting `INHERITED_LABELS` and `INHERITED_ANNOTATIONS` in the [operator configuration](/reference/operator-config).
+
+```yaml
+data:
+  INHERITED_LABELS: environment, team, app
+  INHERITED_ANNOTATIONS: prometheus.io/scrape, cost-center
+```
+
+## Predefined labels
+
+The following labels are set by the operator on managed resources:
+
+| Label | Applies to | Description |
+|-------|------------|-------------|
+| `cnpg.io/cluster` | All resources | Name of the owning `Cluster` resource |
+| `cnpg.io/instanceName` | Pods | Name of the PostgreSQL instance running in the pod. Replaces the deprecated `postgresql` label |
+| `cnpg.io/jobRole` | Jobs | Role of the job: `import`, `initdb`, `join`, or other initialization roles |
+| `cnpg.io/immediateBackup` | Backup resources | Applied to the first `Backup` created by a `ScheduledBackup` with `immediate: true` |
+| `cnpg.io/onlineBackup` | Backup resources | Indicates whether the backup was taken while the cluster was online |
+| `cnpg.io/backupDate` | VolumeSnapshot | ISO 8601 date when the backup was taken |
+| `cnpg.io/backupMonth` | VolumeSnapshot | Year and month of the backup (format: `YYYYMM`) |
+| `cnpg.io/backupYear` | VolumeSnapshot | Year of the backup |
+| `cnpg.io/backupName` | VolumeSnapshot | Identifier of the backup that created the snapshot |
+| `cnpg.io/backupTimeline` | VolumeSnapshot | PostgreSQL timeline of the instance at the time of backup |
+| `cnpg.io/majorVersion` | VolumeSnapshot | PostgreSQL major version of the instance at the time of backup |
+
+<Note>
+  Labels prefixed with `cnpg.io/backup*` and `cnpg.io/majorVersion` are only applied to VolumeSnapshot resources and the VolumeSnapshotContent objects they reference. They are not set on `Backup` CRD resources or object storage backups.
+</Note>
+
+## Using labels for filtering
+
+You can use `cnpg.io/cluster` to list all resources belonging to a cluster:
+
+```bash
+# List all pods for a cluster
+kubectl get pods -l cnpg.io/cluster=cluster-example
+
+# List all backups for a cluster
+kubectl get backup -l cnpg.io/cluster=cluster-example
+
+# List all volume snapshots for a cluster
+kubectl get volumesnapshot -l cnpg.io/cluster=cluster-example
+```
+
+Filter by instance name:
+
+```bash
+kubectl get pods -l cnpg.io/instanceName=cluster-example-2
+```
+
+## Deprecated labels
+
+| Deprecated label | Replacement |
+|-----------------|-------------|
+| `postgresql` | `cnpg.io/instanceName` |
+
+<Warning>
+  The `postgresql` label is deprecated and will be removed in a future release. Update any selectors, monitoring rules, or tooling that rely on it to use `cnpg.io/instanceName` instead.
+</Warning>

@@ -1,0 +1,231 @@
+---
+title: "Replication"
+description: "How CloudNativePG manages PostgreSQL streaming replication, synchronous settings, and replication slots within a cluster."
+keywords: ["replication", "streaming replication", "synchronous replication", "WAL", "replication slots", "high availability"]
+---
+
+CloudNativePG builds high availability on PostgreSQL's native physical replication, integrating it directly into the Kubernetes API. This approach is called **application-level replication** — in contrast to storage-level replication.
+
+<Note>
+  This page covers replication within a single `Cluster` resource. For replication across separate Kubernetes clusters, see [Replica clusters](/operations/replica-clusters).
+</Note>
+
+## How streaming replication works
+
+CloudNativePG manages physical streaming replicas declaratively based on the `instances` count in the `Cluster` spec:
+
+```
+replicas = instances - 1
+```
+
+For example, `instances: 3` creates one primary and two hot standby replicas.
+
+At cluster initialization, CloudNativePG creates a `streaming_replica` user and configures TLS client certificate authentication for it automatically:
+
+```sql
+CREATE USER streaming_replica WITH REPLICATION;
+```
+
+Streaming replication runs over an encrypted channel. The operator manages replication slot lifecycle and WAL file retention to keep each standby synchronized with the primary.
+
+### Continuous backup integration
+
+When continuous backup is configured, CloudNativePG transparently sets `restore_command` on replicas. PostgreSQL can then fall back to the WAL archive when streaming replication is temporarily unavailable.
+
+## Synchronous replication
+
+By default, replication is asynchronous. You can enable synchronous replication through the `.spec.postgresql.synchronous` stanza, which maps to PostgreSQL's `synchronous_standby_names` option. Direct configuration of `synchronous_standby_names` is not permitted.
+
+Two fields are required when defining the stanza:
+
+- `method`: `any` (quorum-based) or `first` (priority-based)
+- `number`: the number of standbys that must acknowledge a WAL record before a commit is returned to the client
+
+<Warning>
+  By default, synchronous replication pauses write operations if the required number of standbys is unavailable. This prioritizes data durability. If self-healing availability matters more than strict RPO=0, use `dataDurability: preferred` instead.
+</Warning>
+
+### Quorum-based synchronous replication
+
+With `method: any`, PostgreSQL waits for any `number` of the listed standbys to confirm receipt of WAL before acknowledging a commit. This is the most common setup for CloudNativePG clusters.
+
+```yaml
+postgresql:
+  synchronous:
+    method: any
+    number: 1
+```
+
+For a three-instance cluster named `cluster-example`, CloudNativePG sets:
+
+```
+ANY 1 (cluster-example-2, cluster-example-3, cluster-example-1)
+```
+
+### Priority-based synchronous replication
+
+With `method: first`, PostgreSQL waits for the first `number` standbys in the list based on priority order. If a high-priority standby disconnects, the next-highest-priority standby takes its place.
+
+```yaml
+postgresql:
+  synchronous:
+    method: first
+    number: 1
+```
+
+<Info>
+  Priority-based replication is most useful when extending synchronous replication beyond the local cluster using `standbyNamesPre` and `standbyNamesPost`.
+</Info>
+
+### Controlling `synchronous_standby_names` content
+
+By default, CloudNativePG populates `synchronous_standby_names` with local pod names. You can customize this with three optional fields:
+
+| Field | Description |
+|-------|-------------|
+| `maxStandbyNamesFromCluster` | Maximum number of local pod names included automatically |
+| `standbyNamesPre` | Standby `application_name` values prepended to the list |
+| `standbyNamesPost` | Standby `application_name` values appended to the list |
+
+<Warning>
+  You are responsible for the availability of standbys named in `standbyNamesPre` and `standbyNamesPost`. Incorrect entries can impact database uptime.
+</Warning>
+
+## Data durability
+
+The `dataDurability` field in `.spec.postgresql.synchronous` controls the trade-off between availability and data safety.
+
+<Tabs>
+  <Tab title="required (default)">
+    PostgreSQL only considers a transaction committed once WAL has been replicated to the required number of synchronous standbys. Write operations pause if the quorum cannot be met.
+
+    This ensures RPO=0 but may reduce availability during standby failures.
+
+    ```yaml
+    postgresql:
+      synchronous:
+        method: any
+        number: 1
+        dataDurability: required
+    ```
+
+    Standbys are prioritized in this order for inclusion in `synchronous_standby_names`:
+    1. Healthy instances
+    2. Unhealthy instances
+    3. Primary
+
+    This ordering ensures the list is always populated, even when standbys are degraded, so writes are held rather than silently skipped.
+  </Tab>
+  <Tab title="preferred (self-healing)">
+    PostgreSQL attempts synchronous replication but allows write operations to continue if fewer than `number` standbys are available. The required count is dynamically reduced to match available healthy replicas.
+
+    ```yaml
+    postgresql:
+      synchronous:
+        method: any
+        number: 2
+        dataDurability: preferred
+    ```
+
+    Only healthy replicas are included in `synchronous_standby_names`. If all standbys become unavailable, synchronous replication is disabled entirely and writes continue asynchronously.
+
+    <Warning>
+      `preferred` mode may result in data loss if all standbys become unavailable. It cannot be used with `standbyNamesPre` or `standbyNamesPost`.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Replication slots
+
+[Replication slots](https://www.postgresql.org/docs/current/warm-standby.html#STREAMING-REPLICATION-SLOTS) prevent the primary from removing WAL segments until all connected standbys have received them. Because slots exist only on the instance that created them, a failover or switchover would normally leave replicas without their slots.
+
+CloudNativePG solves this by automatically synchronizing replication slots from the primary to each standby.
+
+### HA replication slots
+
+CloudNativePG manages physical replication slots for each HA replica. This feature is **enabled by default**.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `.spec.replicationSlots.highAvailability.enabled` | `true` | Enable or disable HA slot management |
+| `.spec.replicationSlots.highAvailability.slotPrefix` | `_cnpg_` | Prefix for operator-managed slots |
+| `.spec.replicationSlots.updateInterval` | `30` | Seconds between standby slot sync cycles |
+
+To disable HA replication slots:
+
+```yaml
+spec:
+  instances: 3
+  replicationSlots:
+    highAvailability:
+      enabled: false
+  storage:
+    size: 1Gi
+```
+
+### User-defined replication slot synchronization
+
+CloudNativePG can also synchronize user-created physical replication slots to all standbys. This is enabled by default. You can disable it or exclude specific slots using regular expressions:
+
+```yaml
+spec:
+  instances: 3
+  replicationSlots:
+    synchronizeReplicas:
+      enabled: true
+      excludePatterns:
+        - "^foo"
+```
+
+<Warning>
+  Monitor user-defined replication slots carefully. Slots that fall too far behind can prevent WAL cleanup and exhaust disk space.
+</Warning>
+
+### Logical decoding slot synchronization
+
+CloudNativePG can synchronize logical decoding slots across all nodes, enabling logical replication clients to reconnect to a promoted standby without data loss. This feature is **disabled by default**.
+
+Enable it in two steps:
+
+<Steps>
+  <Step title="Enable synchronization in the Cluster spec">
+    ```yaml
+    replicationSlots:
+      highAvailability:
+        synchronizeLogicalDecoding: true
+    ```
+  </Step>
+  <Step title="Configure PostgreSQL parameters">
+    <Tabs>
+      <Tab title="PostgreSQL 17+">
+        ```yaml
+        postgresql:
+          parameters:
+            hot_standby_feedback: 'on'
+            sync_replication_slots: 'on'
+        ```
+
+        Also create the logical replication `Subscription` with `failover: 'true'` to enable end-to-end failover support.
+      </Tab>
+      <Tab title="PostgreSQL 16 and earlier">
+        CloudNativePG uses the `pg_failover_slots` extension to synchronize logical replication slots across failovers. Follow the extension's installation requirements for your PostgreSQL version.
+      </Tab>
+    </Tabs>
+  </Step>
+</Steps>
+
+### Capping WAL retained for replication slots
+
+When replication slots are enabled, a lagging or disconnected standby can cause WAL accumulation and disk exhaustion. Use `max_slot_wal_keep_size` (available in PostgreSQL 13+) to cap WAL retention:
+
+```yaml
+postgresql:
+  parameters:
+    max_slot_wal_keep_size: "10GB"
+```
+
+The default value is `-1` (unlimited). Setting an explicit limit is strongly recommended whenever replication slots are enabled.
+
+<Info>
+  CloudNativePG exposes `pg_replication_slots` metrics in the built-in Prometheus exporter, including slot name, type, active status, and lag from primary.
+</Info>

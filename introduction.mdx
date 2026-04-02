@@ -1,0 +1,89 @@
+---
+title: "CloudNativePG"
+description: "The Kubernetes-native operator for managing PostgreSQL clusters — from initial deployment to ongoing maintenance."
+---
+
+## Welcome to CloudNativePG
+
+**CloudNativePG (CNPG)** is an open-source Kubernetes operator designed to manage PostgreSQL workloads natively in Kubernetes. It covers the entire operational lifecycle — from deploying a cluster to automated failover, backups, upgrades, and monitoring — without relying on external HA tools.
+
+CloudNativePG was originally built by [EDB](https://www.enterprisedb.com) and is now a [CNCF Sandbox project](https://www.cncf.io/sandbox-projects/).
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Deploy a PostgreSQL cluster on a local Kubernetes cluster in minutes.
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Install the CloudNativePG operator on any Kubernetes cluster.
+  </Card>
+  <Card title="Architecture" icon="building" href="/concepts/architecture">
+    Understand the design principles and HA topology of CloudNativePG.
+  </Card>
+  <Card title="API Reference" icon="code" href="/reference/api-overview">
+    Explore all Custom Resource Definitions and their fields.
+  </Card>
+</CardGroup>
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Automated failover" icon="shield-check" href="/concepts/failover">
+    Self-healing clusters automatically promote the most up-to-date replica when the primary fails.
+  </Card>
+  <Card title="Backup & recovery" icon="database" href="/operations/backup-recovery">
+    Continuous WAL archiving, volume snapshots, and point-in-time recovery via pluggable CNPG-I plugins.
+  </Card>
+  <Card title="Connection pooling" icon="arrows-split-up-and-left" href="/operations/connection-pooling">
+    Native PgBouncer integration via the `Pooler` CRD for efficient connection management.
+  </Card>
+  <Card title="Declarative management" icon="file-code" href="/operations/declarative-management">
+    Manage PostgreSQL roles, databases, extensions, and tablespaces as Kubernetes resources.
+  </Card>
+  <Card title="Replica clusters" icon="diagram-project" href="/operations/replica-clusters">
+    Distribute PostgreSQL across multiple Kubernetes clusters for disaster recovery.
+  </Card>
+  <Card title="Monitoring" icon="chart-line" href="/observability/monitoring">
+    Built-in Prometheus metrics exporter with customizable queries and Grafana dashboards.
+  </Card>
+</CardGroup>
+
+## How it works
+
+CloudNativePG introduces the `Cluster` Custom Resource Definition (CRD), which represents a PostgreSQL cluster in Kubernetes. The operator continuously reconciles the desired state defined in the `Cluster` resource with the actual state of the running PostgreSQL instances.
+
+<Steps>
+  <Step title="Install the operator">
+    Deploy the CloudNativePG operator into your Kubernetes cluster using a YAML manifest or the `cnpg` kubectl plugin.
+  </Step>
+  <Step title="Define a Cluster">
+    Create a `Cluster` resource specifying the number of instances, storage size, PostgreSQL version, and configuration.
+  </Step>
+  <Step title="Connect your applications">
+    Use the operator-managed services (`-rw`, `-ro`, `-r`) to connect applications to the primary or replicas.
+  </Step>
+  <Step title="Operate with confidence">
+    The operator handles failovers, rolling updates, backups, and scaling automatically according to your desired state.
+  </Step>
+</Steps>
+
+## Custom Resource Definitions
+
+CloudNativePG manages the following Kubernetes resources:
+
+| CRD | Purpose |
+|-----|---------|
+| `Cluster` | PostgreSQL primary/replica cluster |
+| `Backup` | On-demand backup of a cluster |
+| `ScheduledBackup` | Recurring backup schedule |
+| `Pooler` | PgBouncer connection pooler |
+| `Database` | Declarative PostgreSQL database |
+| `Publication` | Logical replication publication |
+| `Subscription` | Logical replication subscription |
+| `ImageCatalog` | Namespace-scoped image catalog |
+| `ClusterImageCatalog` | Cluster-scoped image catalog |
+
+## Community
+
+- [GitHub Discussions](https://github.com/cloudnative-pg/cloudnative-pg/discussions)
+- [CNCF Slack — #cloudnative-pg](https://cloud-native.slack.com/archives/C08MAUJ7NPM)
+- [Stack Overflow — cloudnative-pg tag](https://stackoverflow.com/questions/tagged/cloudnative-pg)

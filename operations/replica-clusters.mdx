@@ -1,0 +1,101 @@
+---
+title: 'Replica clusters'
+description: 'Deploy and manage CloudNativePG replica clusters for disaster recovery, high availability across Kubernetes clusters, and read-only workloads.'
+keywords: ['replica cluster', 'disaster recovery', 'distributed topology', 'read replica', 'OLAP', 'cross-cluster', 'WAL archive', 'streaming replication']
+---
+
+A replica cluster is a CloudNativePG `Cluster` resource that continuously replicates data from another PostgreSQL instance. Replica clusters operate in **continuous recovery mode** and cannot accept writes until promoted to primary.
+
+## Use cases
+
+<CardGroup cols={2}>
+  <Card title="Disaster recovery and HA" icon="shield-check">
+    Deploy a replica cluster in a separate Kubernetes cluster (typically in another region) to enable cross-cluster failover. CloudNativePG refers to this as a **Distributed Topology**.
+  </Card>
+  <Card title="Read-only workloads" icon="chart-bar">
+    Create a **Standalone Replica Cluster** for reporting, OLAP, or other read-only workloads, isolating analytical queries from your primary cluster.
+  </Card>
+</CardGroup>
+
+<Warning>
+CloudNativePG does not perform automated cross-cluster failover. Promoting a replica cluster to primary requires manual intervention or a GitOps-driven process.
+</Warning>
+
+## How replica clusters work
+
+A replica cluster connects to a source cluster and applies changes using PostgreSQL's continuous recovery mechanism. Global objects (roles, databases) cannot be modified on a replica—changes are deferred until the cluster is promoted.
+
+For **Distributed Topology** (planned promotion): define the same role secrets in both the source and replica clusters so credentials remain consistent after promotion.
+
+For **Standalone Replica Clusters** (no planned promotion): no credential coordination is needed.
+
+## Bootstrapping a replica cluster
+
+Choose one of the following methods to create the initial base copy:
+
+<Tabs>
+  <Tab title="Streaming replication">
+    Bootstrap via `pg_basebackup` over a streaming replication connection from the source cluster. Configure the external cluster with a `connectionParameters` section pointing to the source.
+  </Tab>
+  <Tab title="Volume snapshot">
+    Bootstrap by recovering from a volume snapshot of the source cluster. Useful when the source and replica clusters share access to the same storage infrastructure.
+  </Tab>
+  <Tab title="Object store">
+    Bootstrap by recovering a Barman Cloud backup from an object store. The external cluster's `plugin` section configures the [Barman Cloud Plugin](https://cloudnative-pg.io/plugin-barman-cloud/docs/usage/#restoring-a-cluster) to retrieve the base backup.
+  </Tab>
+</Tabs>
+
+For detailed bootstrap configuration, refer to the [Bootstrap section](https://cloudnative-pg.io/documentation/current/bootstrap/#bootstrap-from-another-cluster).
+
+## Configuring replication
+
+Once the base copy is available, configure how changes are replicated from the source:
+
+<AccordionGroup>
+  <Accordion title="Streaming replication">
+    Set up a direct streaming replication connection between the replica cluster and the source. This requires network connectivity and appropriate security configuration. CloudNativePG automatically sets `primary_conninfo` on the replica's primary instance when a `connectionParameters` section is defined in the external cluster.
+  </Accordion>
+  <Accordion title="WAL archive">
+    Replicate via WAL files stored in an object store. The source cluster archives WAL files to the object store, and the replica cluster retrieves them using a CNPG-I plugin such as the Barman Cloud Plugin via the `restore_command`. This method does not require direct network connectivity between clusters.
+  </Accordion>
+  <Accordion title="Hybrid approach">
+    Combine streaming replication and WAL archive. PostgreSQL manages switching between the two methods as needed to maintain data consistency and availability. This is the recommended approach for Distributed Topology deployments.
+  </Accordion>
+</AccordionGroup>
+
+## External cluster definition
+
+Define the source in `.spec.externalClusters`. Two configuration options are available:
+
+**`plugin` section** — for object store–based bootstrapping and WAL recovery using a CNPG-I plugin:
+
+```yaml
+spec:
+  externalClusters:
+    - name: source-cluster
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: source-backup
+```
+
+**`connectionParameters` section** — for streaming replication bootstrapping via `pg_basebackup`:
+
+```yaml
+spec:
+  externalClusters:
+    - name: source-cluster
+      connectionParameters:
+        host: source-cluster-rw.source-namespace.svc
+        user: streaming_replica
+        dbname: postgres
+        sslmode: verify-full
+```
+
+## Promotion
+
+To promote a replica cluster to primary, update the cluster's declarative configuration to remove the replica source and set it as a standalone cluster. CloudNativePG applies the promotion through its normal reconciliation loop.
+
+<Note>
+For Distributed Topology deployments intended for disaster recovery, coordinate the promotion with your failover runbook or GitOps pipeline to avoid split-brain scenarios.
+</Note>

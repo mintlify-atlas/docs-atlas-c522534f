@@ -1,0 +1,168 @@
+---
+title: "Storage"
+description: "How CloudNativePG manages PVCs, WAL volumes, volume expansion, and block storage for PostgreSQL clusters."
+keywords: ["storage", "PVC", "persistent volume", "WAL", "volume expansion", "StorageClass", "Ceph", "Longhorn"]
+---
+
+Storage is the most critical component in a database workload. The same performance, durability, and consistency requirements that apply to PostgreSQL on virtual machines also apply in Kubernetes.
+
+<Info>
+  CloudNativePG does not use `StatefulSet` for data persistence. It manages PersistentVolumeClaims (PVCs) directly, giving the operator fine-grained control over volume lifecycle, expansion, and placement.
+</Info>
+
+## Storage types
+
+<Tabs>
+  <Tab title="Network storage">
+    Network storage is the most common pattern in Kubernetes — PVCs backed by NFS, iSCSI, or cloud block devices mounted remotely. It is widely supported and works with most storage classes.
+
+    Network storage introduces the same throughput and latency constraints as in traditional environments. In shared environments, I/O contention from co-located workloads can increase performance variability.
+  </Tab>
+  <Tab title="Local storage">
+    Local storage is directly attached to the Kubernetes node running the pod. It enables **shared-nothing architectures** and provides higher, more predictable performance — particularly suited for high-transaction and very large database (VLDB) workloads.
+
+    Local storage aligns with CloudNativePG's recommended architecture where each PostgreSQL instance owns its own dedicated disk. See [Architecture](/concepts/architecture) for details.
+  </Tab>
+</Tabs>
+
+<Warning>
+  Benchmark your storage before deploying PostgreSQL in production. Use `fio` to measure sequential and random read/write throughput, and `pgbench` to measure database performance against that storage. Knowing your storage's theoretical maximum helps diagnose issues in production without needing to run tests under pressure.
+</Warning>
+
+## Configuring storage
+
+### Via storage class
+
+The simplest configuration requests a storage size. CloudNativePG satisfies the PVCs using the cluster's default storage class:
+
+```yaml
+spec:
+  instances: 3
+  storage:
+    size: 1Gi
+```
+
+To use a specific storage class, set `storageClass` explicitly:
+
+```yaml
+spec:
+  instances: 3
+  storage:
+    storageClass: standard
+    size: 1Gi
+```
+
+### Via PVC template
+
+For full control over PVC properties — access modes, volume mode, or storage class — provide a PVC template:
+
+```yaml
+spec:
+  instances: 3
+  storage:
+    pvcTemplate:
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+      storageClassName: standard
+      volumeMode: Filesystem
+```
+
+## Separate WAL volume
+
+By default, PostgreSQL stores WAL files (`pg_wal`) inside the `PGDATA` volume. You can configure a separate PVC for WAL using `.spec.walStorage`.
+
+A dedicated WAL volume provides several benefits:
+
+- **I/O performance** — WAL writes (sequential) and data file I/O run on separate devices, improving throughput.
+- **Reliability** — PGDATA disk exhaustion cannot interrupt WAL writing, ensuring clean shutdowns.
+- **Fine-grained control** — You can tune WAL and PGDATA volumes independently, and use different storage classes for each.
+- **Better monitoring** — You can track disk usage and set alerts for PGDATA and WAL independently.
+
+```yaml
+spec:
+  instances: 3
+  storage:
+    size: 1Gi
+  walStorage:
+    size: 1Gi
+```
+
+<Warning>
+  Removing `walStorage` from an existing cluster is not supported. Once a separate WAL volume is added, it cannot be removed without recreating the cluster.
+</Warning>
+
+## Volume expansion
+
+Kubernetes supports expanding PVCs when the underlying `StorageClass` has `allowVolumeExpansion: true`.
+
+To check whether your storage class supports expansion:
+
+```sh
+kubectl get storageclass -o jsonpath='{$.allowVolumeExpansion}' <storage-class-name>
+```
+
+When expansion is supported, update the `size` in the `Cluster` spec. CloudNativePG applies the change to every PVC in the cluster. If the storage class supports online resizing, the change takes effect immediately without restarting pods. Otherwise, delete pods one at a time — starting with replicas — to trigger the resize.
+
+### Recreating storage
+
+If the storage class does not support volume expansion, you can migrate to new PVCs with a larger size. This requires the cluster to have more than one instance.
+
+Set `resizeInUseVolumes: False` to prevent the operator from resizing existing PVCs while you recreate them manually:
+
+```yaml
+spec:
+  instances: 3
+  storage:
+    storageClass: standard
+    size: 1Gi
+    resizeInUseVolumes: False
+```
+
+With this flag set, delete one pod and its PVC at a time. CloudNativePG recreates the instance on a new, larger PVC:
+
+```sh
+kubectl delete pvc/cluster-example-3 pod/cluster-example-3
+```
+
+If a dedicated WAL volume is present, delete both PVCs together:
+
+```sh
+kubectl delete pvc/cluster-example-3 pvc/cluster-example-3-wal pod/cluster-example-3
+```
+
+## Block storage considerations (Ceph/Longhorn)
+
+Block storage solutions like Ceph and Longhorn typically default to multiple volume replicas for resilience. For most workloads this is appropriate, but CloudNativePG already provides resilience at the PostgreSQL level through multiple instances and dedicated PVCs.
+
+Running both PostgreSQL-level replication and storage-level replication causes **write amplification** — unnecessary increases in disk I/O and space usage.
+
+<Tip>
+  For CloudNativePG clusters, reduce the block storage replica count to **1** per volume. Ensure that no single storage host holds blocks from multiple instances of the same `Cluster` — this aligns with the shared-nothing architecture principle.
+</Tip>
+
+<Tabs>
+  <Tab title="Longhorn">
+    Enable **strict-local data locality** when creating a custom StorageClass for Longhorn. This places each volume on the same node as its pod, preventing a single Longhorn host from holding data for multiple PostgreSQL instances.
+
+    Also configure [pod anti-affinity rules](/concepts/architecture#shared-nothing-architecture) so the operator distributes pods across different nodes. If you need to relocate a volume, temporarily increase the replica count to 2, then reduce it and remove the old replica.
+  </Tab>
+  <Tab title="Ceph">
+    Use **CRUSH rules** to enforce one volume per pod per node. This prevents a single Ceph host from holding blocks from multiple instances of the same cluster. Volumes can be relocated by importing them into a different pool.
+  </Tab>
+</Tabs>
+
+## Encryption at rest
+
+CloudNativePG delegates encryption at rest to the underlying storage class. Configure encryption at the StorageClass level using your cloud provider's or storage solution's native encryption features. No additional configuration is required in the `Cluster` spec.
+
+<Columns cols={2}>
+  <Card title="Architecture" icon="building" href="/concepts/architecture">
+    Shared-nothing deployment strategies and node reservation for PostgreSQL workloads.
+  </Card>
+  <Card title="Replication" icon="arrows-rotate" href="/concepts/replication">
+    How CloudNativePG manages streaming replication and replication slots.
+  </Card>
+</Columns>

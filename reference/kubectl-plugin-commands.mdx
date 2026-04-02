@@ -1,0 +1,144 @@
+---
+title: "kubectl plugin commands"
+description: "Reference for all kubectl cnpg commands."
+---
+
+This page documents the commands available in the `kubectl cnpg` plugin. For installation instructions, see [kubectl plugin](/reference/kubectl-plugin).
+
+## install generate
+
+Generate a YAML manifest for the CloudNativePG operator.
+
+```bash
+kubectl cnpg install generate [flags]
+```
+
+| Flag | Description |
+|------|-------------|
+| `-n`, `--namespace` | Namespace to install the operator into (default: `cnpg-system`) |
+| `--replicas` | Number of operator replicas |
+| `--watch-namespace` | Namespace(s) the operator should watch (comma-separated; default: all) |
+| `--version` | Operator version to generate the manifest for |
+
+### Example
+
+```bash
+kubectl cnpg install generate \
+  -n cnpg-system \
+  --replicas 1 \
+  > operator-manifest.yaml
+```
+
+```bash
+kubectl apply -f operator-manifest.yaml
+```
+
+<Tip>
+  Pipe the output directly to `kubectl apply` to install in one step:
+
+  ```bash
+  kubectl cnpg install generate | kubectl apply -f -
+  ```
+</Tip>
+
+---
+
+## status
+
+Display a summary of a cluster's current state, including instance health, replication lag, backup status, and configuration.
+
+```bash
+kubectl cnpg status <cluster> [flags]
+```
+
+| Flag | Description |
+|------|-------------|
+| `-n`, `--namespace` | Namespace of the cluster (default: current namespace) |
+| `-v`, `--verbose` | Include additional details such as streaming replication state and timeline |
+
+### Example
+
+```bash
+kubectl cnpg status cluster-example
+```
+
+```text
+Cluster Summary
+Name:               cluster-example
+Namespace:          default
+System ID:          7289559211112566793
+PostgreSQL Image:   ghcr.io/cloudnative-pg/postgresql:16
+Primary instance:   cluster-example-1
+Status:             Cluster in healthy state
+Instances:          3
+Ready instances:    3
+
+Certificates Status
+Certificate Name             Expiration Date                Days Left Until Expiration
+----------------             ---------------                --------------------------
+cluster-example-ca           2026-01-01 00:00:00 +0000 UTC  87
+cluster-example-replication  2026-01-01 00:00:00 +0000 UTC  87
+cluster-example-server       2026-01-01 00:00:00 +0000 UTC  87
+
+Streaming Replication status
+Replication Slots Enabled
+Name                   Sent LSN      Write LSN     Flush LSN     Replay LSN    Write Lag  Flush Lag  Replay Lag  State      Sync State  Sync Priority
+----                   --------      ---------     ---------     ----------    ---------  ---------  ----------  -----      ----------  -------------
+cluster-example-2      0/8019F70     0/8019F70     0/8019F70     0/8019F70     00:00:00   00:00:00   00:00:00    streaming  async       0
+cluster-example-3      0/8019F70     0/8019F70     0/8019F70     0/8019F70     00:00:00   00:00:00   00:00:00    streaming  async       0
+
+Instances status
+Name               Database Size  Current LSN  Replication role  Status  QoS         Manager Version  Node
+----               -------------  -----------  ----------------  ------  ---         ---------------  ----
+cluster-example-1  33 MB          0/8019F70    Primary           OK      BestEffort  1.24.0           node1
+cluster-example-2  33 MB          0/8019F70    Standby (async)   OK      BestEffort  1.24.0           node2
+cluster-example-3  33 MB          0/8019F70    Standby (async)   OK      BestEffort  1.24.0           node3
+```
+
+---
+
+## promote
+
+Promote a replica instance to become the new primary. The current primary is demoted to a replica.
+
+```bash
+kubectl cnpg promote <cluster> <instance> [flags]
+```
+
+| Flag | Description |
+|------|-------------|
+| `-n`, `--namespace` | Namespace of the cluster |
+
+### Example
+
+```bash
+kubectl cnpg promote cluster-example cluster-example-2
+```
+
+<Warning>
+  Promoting an instance triggers a switchover. Ensure the target instance is healthy and its replication lag is acceptable before proceeding.
+</Warning>
+
+---
+
+## Additional commands
+
+| Command | Description |
+|---------|-------------|
+| `kubectl cnpg backup <cluster>` | Trigger an on-demand backup |
+| `kubectl cnpg destroy <cluster> <instance>` | Remove a specific instance from the cluster |
+| `kubectl cnpg fencing on <cluster>` | Enable fencing to isolate a cluster |
+| `kubectl cnpg fencing off <cluster>` | Disable fencing |
+| `kubectl cnpg hibernate on <cluster>` | Hibernate a cluster (scale to zero) |
+| `kubectl cnpg hibernate off <cluster>` | Resume a hibernated cluster |
+| `kubectl cnpg logs <cluster>` | Stream logs from all cluster instances |
+| `kubectl cnpg maintenance on <cluster>` | Enable maintenance mode |
+| `kubectl cnpg maintenance off <cluster>` | Disable maintenance mode |
+| `kubectl cnpg pgadmin4 <cluster>` | Create a pgAdmin4 deployment for the cluster |
+| `kubectl cnpg psql <cluster>` | Open a psql session on the primary |
+| `kubectl cnpg reload <cluster>` | Reload PostgreSQL configuration without restart |
+| `kubectl cnpg restart <cluster>` | Perform a rolling restart of the cluster |
+| `kubectl cnpg snapshot <cluster>` | Trigger a volume snapshot backup |
+| `kubectl cnpg version` | Print the plugin version |
+
+Run `kubectl cnpg <command> --help` for full flag documentation on any command.

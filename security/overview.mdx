@@ -1,0 +1,75 @@
+---
+title: "Security overview"
+description: "Understand CloudNativePG's security posture across code, container, and cluster layers — including supply chain integrity, vulnerability reporting, and the least privilege principle."
+keywords: ["security", "least privilege", "supply chain", "cosign", "sbom", "codeql", "gosec", "vulnerability"]
+---
+
+CloudNativePG is designed to be secure by default, following the "Least Privilege" principle across all layers of the stack. This page covers security governance, supply chain integrity, and the technical controls applied at three distinct layers: Code, Container, and Cluster.
+
+<Warning>
+  The information on this page does not replace your own InfoSec duties on your Kubernetes cluster. Review the [Overview of Cloud Native Security](https://kubernetes.io/docs/concepts/security/overview/) from the Kubernetes documentation.
+</Warning>
+
+<Note>
+  For deeper context on the security model, see the [4C's Security Model in Kubernetes](https://www.enterprisedb.com/blog/4cs-security-model-kubernetes) article from EDB.
+</Note>
+
+## Governance and trust
+
+### Vulnerability reporting
+
+<Warning>
+  Do not report security vulnerabilities through public GitHub issues.
+</Warning>
+
+CloudNativePG follows a coordinated disclosure model. To report a vulnerability privately, refer to the [Security Policy on GitHub](https://github.com/cloudnative-pg/cloudnative-pg/blob/main/SECURITY.md). The repository has the "Private vulnerability reporting" option enabled in the [Security section](https://github.com/cloudnative-pg/cloudnative-pg/security), allowing you to safely report issues before they are publicly disclosed.
+
+### Release integrity and supply chain
+
+CloudNativePG follows the [OpenSSF Software Producer Security (OSPS) Baseline](https://baseline.openssf.org/). All official release assets — including Kubernetes manifests and container images — are cryptographically signed and verifiable.
+
+## Code
+
+CloudNativePG source code undergoes systematic static analysis on every commit, integrated directly into the CI/CD pipeline via [GolangCI-Lint](https://github.com/golangci/golangci-lint).
+
+<Info>
+  A failure in the static code analysis phase blocks the entire delivery pipeline. Every commit must pass all linters defined by GolangCI-Lint.
+</Info>
+
+The following tools identify security issues:
+
+<CardGroup cols={2}>
+  <Card title="gosec" icon="shield" href="https://github.com/securego/gosec">
+    Scans the Go abstract syntax tree for known vulnerabilities including hard-coded credentials, integer overflows, and SQL injections. Runs as part of GolangCI-Lint.
+  </Card>
+  <Card title="govulncheck" icon="magnifying-glass" href="https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck">
+    Reports known vulnerabilities in Go code and the Go compiler. Detects issues when the operator is built with a vulnerable compiler version.
+  </Card>
+  <Card title="CodeQL" icon="code" href="https://codeql.github.com/">
+    GitHub-provided tool that scans for security issues and blocks pull requests with detected vulnerabilities. Configured to review Go code only.
+  </Card>
+  <Card title="Snyk" icon="bug" href="https://snyk.io/">
+    Runs nightly code scans and generates weekly reports on code security and licensing issues.
+  </Card>
+</CardGroup>
+
+## Container
+
+Every container image — including the operator image and all operand images for every supported PostgreSQL version — is automatically built via CI/CD pipelines on each commit.
+
+<Info>
+  All operand images are automatically and regularly rebuilt to incorporate the latest security updates at both the base image and package levels. This ensures that container images distributed to the community receive patch-level updates regularly.
+</Info>
+
+During CI/CD, images are scanned with:
+
+- **[Dockle](https://github.com/goodwithtech/dockle)** — ensures best practices in the container build process.
+- **[Snyk](https://snyk.io/)** — detects security issues within containers and reports findings via the GitHub interface.
+
+### Image signatures
+
+The operator and operand images are signed with [cosign](https://github.com/sigstore/cosign). Signatures are stored in the same registry as the images and can be verified before deployment.
+
+### Attestations
+
+CloudNativePG provides Software Bill of Materials (SBOM) and provenance attestations for all released images, enabling you to verify the integrity and origin of every artifact in the supply chain.

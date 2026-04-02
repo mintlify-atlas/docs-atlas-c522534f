@@ -1,0 +1,171 @@
+---
+title: "Cluster"
+description: "Reference for the Cluster Custom Resource Definition — the primary CRD for managing PostgreSQL clusters in CloudNativePG."
+---
+
+The `Cluster` CRD represents a PostgreSQL cluster managed by CloudNativePG. It is the central resource from which all other operator behavior derives.
+
+## Minimal example
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: cluster-example
+spec:
+  instances: 3
+  storage:
+    size: 1Gi
+```
+
+## Managed services
+
+CloudNativePG creates the following Kubernetes Services for each cluster:
+
+| Service | Target | Purpose |
+|---------|--------|---------|
+| `<name>-rw` | Primary only | Read-write connections |
+| `<name>-ro` | Replicas only | Read-only connections |
+| `<name>-r` | All instances | Read connections (any instance) |
+| `<name>-any` | All instances including non-ready | Advanced use cases; opt-in via operator config |
+
+<Note>
+  The `-any` service is not created by default. Enable it by setting `CREATE_ANY_SERVICE: 'true'` in the [operator configuration](/reference/operator-config).
+</Note>
+
+## Managed secrets
+
+The operator creates and manages the following Secrets:
+
+| Secret | Contents |
+|--------|----------|
+| `<name>-superuser` | PostgreSQL superuser credentials |
+| `<name>-app` | Application user credentials |
+| `<name>-replication` | Streaming replication credentials |
+| `<name>-ca` | Cluster CA certificate |
+| `<name>-server` | Server TLS certificate |
+
+## Spec fields
+
+### Core
+
+<ParamField path="spec.instances" type="number" required default="1">
+  Number of PostgreSQL instances in the cluster. Minimum value is `1`. Set to `3` or more for high availability.
+</ParamField>
+
+<ParamField path="spec.imageName" type="string">
+  PostgreSQL container image to use. If not specified, the operator default is used (configured via `POSTGRES_IMAGE_NAME`).
+</ParamField>
+
+### Storage
+
+<ParamField path="spec.storage.size" type="string" required>
+  Size of the persistent volume for PGDATA. Example: `"10Gi"`.
+</ParamField>
+
+<ParamField path="spec.storage.storageClass" type="string">
+  StorageClass name for the PGDATA volume. Uses the cluster default if not specified.
+</ParamField>
+
+<ParamField path="spec.walStorage" type="object">
+  Separate persistent volume for WAL files. Accepts the same fields as `spec.storage`. When defined, WAL files are stored on a dedicated PVC rather than the PGDATA volume.
+</ParamField>
+
+### PostgreSQL configuration
+
+<ParamField path="spec.postgresql.parameters" type="object">
+  Key-value map of PostgreSQL GUC settings applied to `postgresql.conf`. See [PostgreSQL configuration](/reference/postgresql-config) for details and operator-managed defaults.
+</ParamField>
+
+<ParamField path="spec.postgresql.pg_hba" type="string[]">
+  List of client authentication rules appended to `pg_hba.conf`.
+</ParamField>
+
+<ParamField path="spec.postgresql.synchronous" type="object">
+  Synchronous replication configuration, including method (`any` or `first`), number of synchronous standbys, and self-healing behavior.
+</ParamField>
+
+### Replication
+
+<ParamField path="spec.replicationSlots" type="object">
+  Controls automatic replication slot management for HA and logical replication. Includes `highAvailability.enabled` and `updateInterval`.
+</ParamField>
+
+### Backup
+
+<ParamField path="spec.backup.target" type="string" default="primary">
+  Determines which instance is preferred for backups. Accepted values: `primary`, `prefer-standby`.
+</ParamField>
+
+### Scheduling and placement
+
+<ParamField path="spec.affinity.nodeSelector" type="object">
+  Key-value pairs for node selection. Pods are only scheduled on nodes matching all specified labels.
+</ParamField>
+
+<ParamField path="spec.affinity.tolerations" type="object[]">
+  Kubernetes tolerations for pod scheduling on tainted nodes.
+</ParamField>
+
+### Update strategy
+
+<ParamField path="spec.primaryUpdateStrategy" type="string" default="unsupervised">
+  Controls how the operator handles primary switchover during rolling updates.
+
+  - `unsupervised` — the operator switches over the primary automatically.
+  - `supervised` — the operator waits for a manual trigger before switching over.
+</ParamField>
+
+<ParamField path="spec.primaryUpdateMethod" type="string" default="restart">
+  Method used when updating the primary instance.
+
+  - `restart` — performs a PostgreSQL restart.
+  - `switchover` — promotes a replica before restarting the former primary.
+</ParamField>
+
+### Failover and switchover
+
+<ParamField path="spec.failoverDelay" type="number" default="0">
+  Number of seconds the operator waits before initiating an automatic failover after detecting primary failure. Increasing this value reduces the chance of unnecessary failovers during transient issues.
+</ParamField>
+
+<ParamField path="spec.switchoverDelay" type="number" default="40000000">
+  Fast shutdown timeout (in seconds) during a switchover. Controls how long the operator waits for the primary to shut down cleanly before forcing termination.
+</ParamField>
+
+## Full example with common fields
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: cluster-example
+  namespace: default
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:16
+
+  storage:
+    size: 10Gi
+    storageClass: standard
+
+  walStorage:
+    size: 2Gi
+
+  postgresql:
+    parameters:
+      shared_buffers: "256MB"
+      max_connections: "100"
+    pg_hba:
+      - host all all 10.0.0.0/8 md5
+
+  backup:
+    target: prefer-standby
+
+  primaryUpdateStrategy: unsupervised
+  primaryUpdateMethod: switchover
+
+  affinity:
+    nodeSelector:
+      workload: postgres
+```

@@ -1,0 +1,102 @@
+---
+title: "Monitoring"
+description: "Export PostgreSQL metrics to Prometheus and visualize them with Grafana using the built-in CloudNativePG metrics exporter."
+keywords: ["monitoring", "prometheus", "grafana", "metrics", "podmonitor", "pgbouncer"]
+---
+
+<Info>
+  Installing Prometheus and Grafana is outside the scope of this documentation. This page assumes both are already running in your cluster. For a guided setup, see [Part 4 of the Quickstart](/quickstart).
+</Info>
+
+## Monitoring instances
+
+CloudNativePG includes a Prometheus metrics exporter on each PostgreSQL instance pod. Metrics are served over HTTP or HTTPS on port `9187`, using the named port `metrics`.
+
+By default, CloudNativePG installs a predefined set of metrics via a `ConfigMap` named `cnpg-default-monitoring`.
+
+All monitoring queries run against PostgreSQL with the following guarantees:
+
+- Each query runs as a single atomic transaction.
+- Queries execute with the `pg_monitor` role.
+- The `application_name` is set to `cnpg_metrics_exporter`.
+- Queries run as the `postgres` user.
+
+### Target database
+
+Queries run against the main database defined by the `bootstrap` method of the `Cluster` resource:
+
+| Bootstrap method | Default target database |
+|------------------|------------------------|
+| `initdb` | `initdb.database`, or `app` if unset |
+| `recovery` | `recovery.database`, or `postgres` if unset |
+| `pg_basebackup` | `pg_basebackup.database`, or `postgres` if unset |
+
+You can override the default target for any individual user-defined metric by specifying one or more databases in the `target_databases` option.
+
+### Output caching
+
+Metric query results are cached for 30 seconds by default. This reduces load on PostgreSQL when the Prometheus endpoint is scraped frequently.
+
+You can observe cache behavior through the `cache_hits`, `cache_misses`, and `last_update_timestamp` metrics.
+
+To disable caching and run queries on every scrape, set `metricsQueriesTTL` to `0`:
+
+```yaml
+spec:
+  monitoring:
+    metricsQueriesTTL: 0
+```
+
+## Monitoring with the Prometheus Operator
+
+Use the Prometheus Operator's `PodMonitor` resource to scrape metrics from a CloudNativePG cluster. Create a `PodMonitor` manually for each cluster you want to monitor.
+
+<Warning>
+  The `.spec.monitoring.enablePodMonitor` field is deprecated. Create and manage `PodMonitor` resources manually instead.
+</Warning>
+
+### Creating a PodMonitor
+
+Deploy the `PodMonitor` in the same namespace where your Prometheus Operator is configured to discover `PodMonitor` resources.
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cluster-example
+spec:
+  selector:
+    matchLabels:
+      cnpg.io/cluster: cluster-example
+  podMetricsEndpoints:
+  - port: metrics
+```
+
+<Note>
+  Key configuration details:
+  - `metadata.name` — give the `PodMonitor` a unique name.
+  - `spec.namespaceSelector` — specify the namespace where your PostgreSQL cluster runs if it differs from the Prometheus Operator namespace.
+  - `spec.selector.matchLabels` — must use the `cnpg.io/cluster: <cluster-name>` label to target the correct instances.
+</Note>
+
+## User-defined metrics
+
+You can extend the default metric set by providing custom SQL queries via a `ConfigMap` or `Secret`. Reference these resources in `cluster.spec.monitoring.customQueriesConfigMap` or `cluster.spec.monitoring.customQueriesSecret`.
+
+Each query result becomes a set of Prometheus metrics with labels derived from the column names returned.
+
+## Grafana dashboards
+
+Pre-built Grafana dashboards are available at [github.com/cloudnative-pg/grafana-dashboards](https://github.com/cloudnative-pg/grafana-dashboards). Import them directly into your Grafana instance to get started with visualization.
+
+## PgBouncer metrics
+
+When using a `Pooler` resource, PgBouncer metrics are exposed on port `9127`. All metrics use the `cnpg_pgbouncer_` prefix and are collected from the following PgBouncer internal commands:
+
+| Command | Data provided |
+|---------|--------------|
+| `SHOW LISTS` | Active connections, databases, pools |
+| `SHOW POOLS` | Per-pool connection state |
+| `SHOW STATS` | Request rates, query durations, data transferred |
+
+Configure a separate `PodMonitor` targeting the `Pooler` pods to scrape these metrics.

@@ -1,0 +1,228 @@
+---
+title: 'Connection pooling'
+description: 'Deploy PgBouncer connection poolers for CloudNativePG clusters using the Pooler CRD to improve connection scalability and performance.'
+keywords: ['connection pooling', 'PgBouncer', 'Pooler', 'pgbouncer', 'session pooling', 'transaction pooling']
+---
+
+CloudNativePG provides native support for connection pooling using [PgBouncer](https://www.pgbouncer.org/) through the `Pooler` custom resource definition (CRD). A `Pooler` deploys PgBouncer pods between your applications and a PostgreSQL service, creating a scalable, configurable, and highly available database access layer.
+
+<Warning>
+CloudNativePG requires the `auth_dbname` feature in PgBouncer. Use PgBouncer version **1.19 or higher**.
+</Warning>
+
+## Quick start
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: pooler-example-rw
+spec:
+  cluster:
+    name: cluster-example
+  instances: 3
+  type: rw
+  pgbouncer:
+    poolMode: session
+    parameters:
+      max_client_conn: "1000"
+      default_pool_size: "10"
+```
+
+<Info>
+The pooler name cannot be the same as any cluster name in the same namespace.
+</Info>
+
+This creates a `Pooler` pointing to the primary (read/write) service of `cluster-example`. The `Pooler` must live in the same namespace as the PostgreSQL cluster.
+
+## Pooler lifecycle
+
+`Pooler` resources are not managed automatically by the operator. Create them manually when needed, and deploy multiple poolers for the same cluster if required.
+
+The lifecycles of `Cluster` and `Pooler` are independent:
+
+- Deleting a cluster does not remove its poolers.
+- Deleting a pooler does not affect the cluster.
+
+<Info>
+When the operator is upgraded, pooler pods undergo a rolling upgrade to ensure the instance manager is updated consistently.
+</Info>
+
+## Pool modes
+
+Set the pool mode using `.spec.pgbouncer.poolMode`:
+
+| Mode | Description |
+|---|---|
+| `session` | A server connection is assigned for the full duration of a client connection. |
+| `transaction` | A server connection is assigned only for the duration of a transaction. |
+| `statement` | A server connection is assigned per SQL statement. Multi-statement transactions are not supported. |
+
+## Pod templates
+
+Customize the underlying pods using `.spec.template`. The full Kubernetes `PodSpec` is available for scheduling constraints, resource limits, and security contexts.
+
+<Warning>
+The `containers` field in the pod template is mandatory. If you are not overriding container settings, set it to an empty array: `containers: []`. A missing `containers` field causes a `ValidationError`.
+</Warning>
+
+When overriding container settings, the container name **must** be `pgbouncer`.
+
+### High availability with pod anti-affinity
+
+Distribute PgBouncer pods across nodes to prevent a single node failure from taking down the entire pool:
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: pooler-example-rw
+spec:
+  cluster:
+    name: cluster-example
+  instances: 3
+  type: rw
+  template:
+    metadata:
+      labels:
+        app: pooler
+    spec:
+      containers: []
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - pooler
+            topologyKey: "kubernetes.io/hostname"
+```
+
+### Custom image and resource limits
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: pooler-example-rw
+spec:
+  cluster:
+    name: cluster-example
+  instances: 3
+  type: rw
+  template:
+    spec:
+      containers:
+        - name: pgbouncer  # Must be "pgbouncer"
+          image: my-pgbouncer:latest
+          resources:
+            requests:
+              cpu: "0.1"
+              memory: 100Mi
+            limits:
+              cpu: "0.5"
+              memory: 500Mi
+```
+
+## Service template
+
+Customize labels, annotations, or service type using `.spec.serviceTemplate`:
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: pooler-example-rw
+spec:
+  cluster:
+    name: cluster-example
+  instances: 3
+  type: rw
+  serviceTemplate:
+    metadata:
+      labels:
+        app: pooler
+    spec:
+      type: LoadBalancer
+  pgbouncer:
+    poolMode: session
+    parameters:
+      max_client_conn: "1000"
+      default_pool_size: "10"
+```
+
+The operator adds a default `ServicePort` for PgBouncer on port 5432.
+
+<Warning>
+Do not define a `ServicePort` with the name `pgbouncer` or port `5432` in your service template. Duplicate names or ports are not allowed in Kubernetes and will cause errors.
+</Warning>
+
+## Pausing connections
+
+Use the `paused` field to declaratively invoke PgBouncer's `PAUSE` and `RESUME` commands:
+
+```yaml
+spec:
+  paused: true
+```
+
+When `paused: true`, the operator:
+
+1. Waits for active queries to complete.
+2. Closes all server connections.
+3. Blocks new client connections.
+
+Setting `paused: false` resumes all connections.
+
+## Monitoring
+
+PgBouncer pods expose Prometheus metrics on port `9127` with the `cnpg_pgbouncer_` prefix, collected from:
+
+- `SHOW LISTS` → `cnpg_pgbouncer_lists_*`
+- `SHOW POOLS` → `cnpg_pgbouncer_pools_*`
+- `SHOW STATS` → `cnpg_pgbouncer_stats_*`
+
+Create a `PodMonitor` to integrate with the Prometheus Operator:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: pooler-example-rw
+spec:
+  selector:
+    matchLabels:
+      cnpg.io/poolerName: pooler-example-rw
+  podMetricsEndpoints:
+  - port: metrics
+```
+
+<Warning>
+The `.spec.monitoring.enablePodMonitor` field in the `Pooler` resource is deprecated and will be removed in a future version. Remove or set it to `false` and manage `PodMonitor` resources manually as shown above.
+</Warning>
+
+## Logging
+
+PgBouncer logs are written to standard output in JSON format:
+
+```json
+{
+  "level": "info",
+  "ts": 1234567890.123456,
+  "msg": "record",
+  "pipe": "stderr",
+  "record": {
+    "timestamp": "2024-01-01 00:00:00.000 UTC",
+    "pid": "1",
+    "level": "LOG",
+    "msg": "kernel file descriptor limit: 1048576 (hard: 1048576); max_client_conn: 100, max expected fd use: 112"
+  }
+}
+```
+
+## Limitations
+
+- A pooler is bound to a single CloudNativePG cluster. It is not possible to create a pooler that spans multiple clusters.
+- CloudNativePG manages TLS certificates, authentication settings, and the `databases` and `users` sections of the PgBouncer configuration transparently. These are not user-configurable.

@@ -1,0 +1,87 @@
+---
+title: "ScheduledBackup"
+description: "Recurring backup schedule for a CloudNativePG cluster using cron expressions."
+---
+
+The `ScheduledBackup` CRD automates recurring backups for a CloudNativePG cluster using a cron-based schedule.
+
+## Example
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: backup-example
+spec:
+  schedule: "0 0 0 * * *"
+  backupOwnerReference: self
+  cluster:
+    name: pg-backup
+```
+
+## Spec fields
+
+<ParamField path="spec.cluster.name" type="string" required>
+  Name of the target `Cluster` resource. Must be in the same namespace as the `ScheduledBackup`.
+</ParamField>
+
+<ParamField path="spec.schedule" type="string" required>
+  Cron expression defining when backups run. Uses a **six-field** format where the first field is seconds.
+
+  Example: `"0 0 0 * * *"` runs daily at midnight.
+
+  Format: `<seconds> <minutes> <hours> <day-of-month> <month> <day-of-week>`
+</ParamField>
+
+<ParamField path="spec.method" type="string" default="barmanObjectStore">
+  Backup method. Accepted values: `plugin`, `volumeSnapshot`, `barmanObjectStore` (deprecated).
+</ParamField>
+
+<ParamField path="spec.backupOwnerReference" type="string" default="none">
+  Determines the owner reference set on each `Backup` resource created by the schedule.
+
+  - `none` — no owner reference is set.
+  - `self` — the `ScheduledBackup` resource is set as the owner. Backups are deleted when the schedule is deleted.
+  - `cluster` — the `Cluster` resource is set as the owner. Backups are deleted when the cluster is deleted.
+</ParamField>
+
+<ParamField path="spec.immediate" type="boolean" default="false">
+  When `true`, the operator triggers a backup immediately upon creation of the `ScheduledBackup` resource, in addition to the scheduled runs.
+</ParamField>
+
+<ParamField path="spec.suspend" type="boolean" default="false">
+  When `true`, the schedule is paused and no new backups are triggered. Existing backups are not affected. Set back to `false` to resume.
+</ParamField>
+
+## Schedule format
+
+<Warning>
+  The schedule format **includes seconds** as the first field. This differs from the standard five-field crontab format used by most Unix tools.
+</Warning>
+
+| Field | Values | Example |
+|-------|--------|---------|
+| Seconds | 0–59 | `0` |
+| Minutes | 0–59 | `30` |
+| Hours | 0–23 | `2` |
+| Day of month | 1–31 or `*` | `*` |
+| Month | 1–12 or `*` | `*` |
+| Day of week | 0–6 or `*` | `*` |
+
+Common schedule examples:
+
+| Schedule | Meaning |
+|----------|---------|
+| `0 0 0 * * *` | Daily at midnight |
+| `0 0 2 * * *` | Daily at 2:00 AM |
+| `0 0 0 * * 0` | Weekly on Sunday at midnight |
+| `0 0 0 1 * *` | Monthly on the 1st at midnight |
+
+## Lifecycle of created backups
+
+Each scheduled run creates a `Backup` resource. Use `backupOwnerReference: self` to ensure backups are garbage-collected when you delete the `ScheduledBackup`.
+
+```bash
+# List all backups created by this schedule
+kubectl get backup -l cnpg.io/cluster=pg-backup
+```
